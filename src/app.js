@@ -1,8 +1,9 @@
 // src/app.js
-const express = require('express');
+import express from 'express';
+import authRoutes from './routes/auth.routes.js';         // Updated path
+import certificateRoutes from './routes/certificate.routes.js'; // Updated path
+
 const app = express();
-const authRoutes = require('./routes/authRoutes');
-const certificateRoutes = require('./routes/certificateRoutes');
 
 // Parse JSON bodies
 app.use(express.json());
@@ -17,4 +18,4 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong!' });
 });
 
-module.exports = app;
+export default app;

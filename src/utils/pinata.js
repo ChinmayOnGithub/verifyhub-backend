@@ -1,23 +1,21 @@
 // src/utils/pinata.js
-const axios = require('axios');
-const fs = require('fs');
-const FormData = require('form-data');
-const { PINATA_API_URL } = require('../constants');
-const dotenv = require('dotenv');
+import axios from 'axios';
+import fs from 'fs';
+import FormData from 'form-data';
+import { PINATA_API_URL } from '../constants.js';
+import dotenv from 'dotenv';
 
 dotenv.config();
 
 /**
  * Uploads a file to Pinata and returns the IPFS hash.
- * @param {string} filePath - Path to the file.
- * @returns {Promise<string|null>} - The IPFS hash if successful, or null on failure.
  */
-exports.uploadToPinata = async (filePath) => {
+export const uploadToPinata = async (filePath) => {
   try {
     const apiKey = process.env.PINATA_API_KEY;
     const apiSecret = process.env.PINATA_API_SECRET;
     if (!apiKey || !apiSecret) {
-      throw new Error("Pinata API credentials not set in environment variables");
+      throw new Error('Pinata API credentials not set in environment variables');
     }
 
     const data = new FormData();

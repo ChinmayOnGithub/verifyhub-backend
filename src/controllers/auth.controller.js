@@ -1,12 +1,14 @@
 // src/controllers/authController.js
-const User = require('../models/User');
-const jwt = require('jsonwebtoken');
+import User from '../models/user.model.js';
+import jwt from 'jsonwebtoken';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 /**
  * Registers a new user.
- * Expects email, password, and role in the request body.
  */
-exports.register = async (req, res) => {
+export const register = async (req, res) => {
   try {
     const { email, password, role } = req.body;
     if (!email || !password || !role) {
@@ -16,20 +18,23 @@ exports.register = async (req, res) => {
     const user = new User({ email, password, role });
     await user.save();
 
-    // Generate a JWT token
-    const token = jwt.sign({ id: user._id, email: user.email, role: user.role }, process.env.JWT_SECRET, { expiresIn: '1d' });
+    // Generate JWT
+    const token = jwt.sign(
+      { id: user._id, email: user.email, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '1d' }
+    );
     res.status(201).json({ message: 'User registered successfully', token });
   } catch (error) {
     console.error('Registration error:', error);
-    res.status(500).json({ error: 'Registration failed' });
+    res.status(500).json({ error: 'Registration failed', error });
   }
 };
 
 /**
  * Logs in a user.
- * Expects email and password in the request body.
  */
-exports.login = async (req, res) => {
+export const login = async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
@@ -41,8 +46,12 @@ exports.login = async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Generate a JWT token
-    const token = jwt.sign({ id: user._id, email: user.email, role: user.role }, process.env.JWT_SECRET, { expiresIn: '1d' });
+    // Generate JWT
+    const token = jwt.sign(
+      { id: user._id, email: user.email, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '1d' }
+    );
     res.status(200).json({ message: 'Login successful', token });
   } catch (error) {
     console.error('Login error:', error);

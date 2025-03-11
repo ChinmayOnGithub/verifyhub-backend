@@ -1,51 +1,54 @@
 // src/controllers/certificateController.js
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const axios = require('axios');
-const pdfUtils = require('../utils/pdfUtils');
-const pinata = require('../utils/pinata');
-const { contract, web3 } = require('../utils/blockchain');
-const { PINATA_GATEWAY_BASE_URL } = require('../constants');
-const Certificate = require('../models/Certificate'); // Optional local storage
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+import axios from 'axios';
+import pdfUtils from '../utils/pdfUtils.js';
+import * as pinata from '../utils/pinata.js';
+import { contract, web3 } from '../utils/blockchain.js';
+import { PINATA_GATEWAY_BASE_URL } from '../constants.js';
+import Certificate from '../models/certificate.model.js'; // Optional local storage
 
 /**
  * Generates a certificate:
- * 1. Generates a PDF certificate.
- * 2. Uploads the PDF to Pinata and retrieves an IPFS hash.
- * 3. Computes a certificate ID (SHA256 hash of uid, candidateName, courseName, orgName).
- * 4. Calls the smart contract to store the certificate.
- * 5. Optionally stores the certificate record in MongoDB.
+ * 1. Creates a PDF certificate.
+ * 2. Uploads PDF to Pinata.
+ * 3. Computes certificate ID.
+ * 4. Records certificate on the blockchain.
+ * 5. Optionally stores a local record.
  */
-exports.generateCertificate = async (req, res) => {
+export const generateCertificate = async (req, res) => {
   try {
     const { uid, candidateName, courseName, orgName } = req.body;
     if (!uid || !candidateName || !courseName || !orgName) {
       return res.status(400).json({ error: 'Missing required certificate details' });
     }
 
-    // Define PDF output path and use a default logo from public/assets
-    const pdfFilePath = path.join(__dirname, '../../uploads', `certificate_${Date.now()}.pdf`);
-    const instituteLogoPath = path.join(__dirname, '../../public/assets/logo.jpg');
+    // Define PDF output path and institute logo path
+    const outputDir = path.resolve('uploads');
+    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir);
+    const pdfFilePath = path.join(outputDir, `certificate_${Date.now()}.pdf`);
+    const instituteLogoPath = path.resolve('public/assets/logo.jpg');
 
     // Generate certificate PDF
     await pdfUtils.generateCertificate(pdfFilePath, uid, candidateName, courseName, orgName, instituteLogoPath);
 
     // Upload PDF to Pinata
     const ipfsHash = await pinata.uploadToPinata(pdfFilePath);
-    fs.unlinkSync(pdfFilePath); // Remove the generated PDF file
+    fs.unlinkSync(pdfFilePath); // Remove the file
 
     if (!ipfsHash) {
       return res.status(500).json({ error: 'Failed to upload certificate to Pinata' });
     }
 
-    // Compute certificate ID using SHA256 hash
+    // Compute certificate ID (SHA256)
     const dataToHash = `${uid}${candidateName}${courseName}${orgName}`;
     const certificateId = crypto.createHash('sha256').update(dataToHash).digest('hex');
 
-    // Call blockchain smart contract to record the certificate
+    // Interact with blockchain smart contract
     const accounts = await web3.eth.getAccounts();
-    await contract.methods.generateCertificate(certificateId, uid, candidateName, courseName, orgName, ipfsHash)
+    await contract.methods
+      .generateCertificate(certificateId, uid, candidateName, courseName, orgName, ipfsHash)
       .send({ from: accounts[0] });
 
     // Optionally store certificate record in MongoDB
@@ -55,23 +58,21 @@ exports.generateCertificate = async (req, res) => {
     res.status(200).json({ message: 'Certificate generated successfully', certificateId });
   } catch (error) {
     console.error('Error generating certificate:', error);
-    res.status(500).json({ error: 'Certificate generation failed' });
+    res.status(500).json({ error: 'Certificate generation failed', error });
   }
 };
 
 /**
  * Verifies a certificate via a PDF upload.
- * Extracts certificate details from the PDF, computes the certificate ID,
- * and checks on the blockchain if the certificate exists.
  */
-exports.verifyCertificatePdf = async (req, res) => {
+export const verifyCertificatePdf = async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
     const filePath = req.file.path;
     const { uid, candidateName, courseName, orgName } = await pdfUtils.extractCertificate(filePath);
-    fs.unlinkSync(filePath); // Remove temporary file
+    fs.unlinkSync(filePath); // Remove temp file
 
     const dataToHash = `${uid}${candidateName}${courseName}${orgName}`;
     const certificateId = crypto.createHash('sha256').update(dataToHash).digest('hex');
@@ -90,13 +91,12 @@ exports.verifyCertificatePdf = async (req, res) => {
 
 /**
  * Verifies a certificate using its certificate ID.
- * Retrieves certificate details from the blockchain and fetches the PDF from Pinata.
  */
-exports.verifyCertificateById = async (req, res) => {
+export const verifyCertificateById = async (req, res) => {
   try {
     const certificateId = req.params.certificateId;
     const result = await contract.methods.getCertificate(certificateId).call();
-    const ipfsHash = result[4]; // Assuming IPFS hash is the 5th element
+    const ipfsHash = result[4];
 
     if (!ipfsHash) {
       return res.status(404).json({ error: 'Certificate not found on blockchain' });
@@ -104,7 +104,6 @@ exports.verifyCertificateById = async (req, res) => {
 
     const contentUrl = `${PINATA_GATEWAY_BASE_URL}/${ipfsHash}`;
     const response = await axios.get(contentUrl, { responseType: 'arraybuffer' });
-
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': 'inline; filename="certificate.pdf"'

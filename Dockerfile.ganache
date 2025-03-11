@@ -1,5 +1,5 @@
 FROM node:16
 WORKDIR /app
-RUN npm install -g ganache-cli
-RUN npm install -g truffle
-CMD ["bash", "-c", "ganache-cli -h ganache & sleep 5 && truffle migrate && tail -f /dev/null"]
+RUN npm install -g ganache-cli truffle
+EXPOSE 8545
+CMD ["bash", "-c", "ganache-cli -h 0.0.0.0 & sleep 5 && truffle migrate && tail -f /dev/null"]

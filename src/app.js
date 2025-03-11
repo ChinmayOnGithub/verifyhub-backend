@@ -1,12 +1,20 @@
-import express from 'express';
-
+// src/app.js
+const express = require('express');
 const app = express();
+const authRoutes = require('./routes/authRoutes');
+const certificateRoutes = require('./routes/certificateRoutes');
 
-// common middleware
+// Parse JSON bodies
 app.use(express.json());
-app.use(express.urlencoded({ extende: true, limit: "16kb" }));
-app.use(cookieParser())
-app.use(express.static("public"));
 
+// Mount API routes
+app.use('/api/auth', authRoutes);
+app.use('/api/certificate', certificateRoutes);
 
-export { app }
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ error: 'Something went wrong!' });
+});
+
+module.exports = app;

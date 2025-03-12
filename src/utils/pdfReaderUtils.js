@@ -1,31 +1,52 @@
-// src/utils/pdfReaderUtils.js
 import { PdfReader } from 'pdfreader';
 
-/**
- * Extracts text from a PDF file using pdfreader.
- * @param {string} filePath - The path to the PDF file.
- * @returns {Promise<string>} - A promise that resolves with the extracted text.
- */
-export const extractTextFromPDF = (filePath) => {
+const FIELD_PATTERNS = {
+  uid: /^\s*UID\s*:\s*(.+)/i,
+  candidateName: /^\s*Candidate\s+Name\s*:\s*(.+)/i,
+  courseName: /^\s*Course\s+Name\s*:\s*(.+)/i,
+  orgName: /^\s*(Organization|Org)\s*:\s*(.+)/i // More flexible pattern
+};
+
+export const extractCertificate = (filePath) => {
   return new Promise((resolve, reject) => {
-    const rows = {}; // Mapping of y coordinate (row) to text content.
+    const fields = { uid: null, candidateName: null, courseName: null, orgName: null };
+    const textItems = [];
+    let currentY = null;
+
     new PdfReader().parseFileItems(filePath, (err, item) => {
-      if (err) {
-        reject(err);
-      } else if (!item) {
-        // End of file reached; sort rows and join text.
-        const text = Object.keys(rows)
-          .sort((a, b) => a - b)
-          .map((rowNum) => rows[rowNum])
-          .join('\n');
-        resolve(text);
-      } else if (item.text) {
-        // Append text to the corresponding row (round y coordinate for consistency)
-        const y = Math.floor(item.y);
-        rows[y] = (rows[y] || "") + item.text + " ";
+      if (err) return reject(err);
+
+      if (!item) {
+        // Process collected text items
+        const lines = {};
+        textItems.forEach(({ y, text }) => {
+          lines[y] = (lines[y] || '') + text + ' ';
+        });
+
+        Object.values(lines).forEach(line => {
+          const cleanLine = line.trim();
+          Object.entries(FIELD_PATTERNS).forEach(([field, pattern]) => {
+            const match = cleanLine.match(pattern);
+            if (match) {
+              fields[field] = (match[1] || match[2]).trim(); // Handle different capture groups
+            }
+          });
+        });
+
+        // Final validation
+        const missing = Object.entries(fields).filter(([_, v]) => !v).map(([k]) => k);
+        if (missing.length) return reject(new Error(`Missing fields: ${missing.join(', ')}`));
+        return resolve(fields);
+      }
+
+      if (item.text) {
+        // Group text by Y position
+        if (currentY !== item.y) {
+          currentY = item.y;
+          textItems.push({ y: currentY, text: '' });
+        }
+        textItems[textItems.length - 1].text += item.text + ' ';
       }
     });
   });
 };
-
-export default extractTextFromPDF;

@@ -1,18 +1,15 @@
-FROM node:16
+FROM node:18-alpine
+
 WORKDIR /app
-# Install netcat to use wait-for-it
-RUN apt-get update && apt-get install -y netcat
-# Install Truffle globally
-RUN npm install -g truffle
-# Copy package files and install dependencies
+
+RUN apk add --no-cache bash
+
 COPY package*.json ./
+RUN npm install -g truffle
 RUN npm install
-# Copy the entire project
+
 COPY . .
-# Copy wait-for-it and entrypoint scripts, make them executable
-COPY wait-for-it.sh /app/wait-for-it.sh
-RUN chmod +x /app/wait-for-it.sh
-COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
-# Set entrypoint to run our script
+
+RUN chmod +x wait-for-it.sh entrypoint.sh
+
 ENTRYPOINT ["/app/entrypoint.sh"]

@@ -3,20 +3,25 @@ const fs = require('fs');
 const path = require('path');
 
 module.exports = async function (deployer) {
+  // Deploy contract
   await deployer.deploy(Certification);
-  const deployedCertification = await Certification.deployed();
+  const instance = await Certification.deployed();
 
-  const config = {
-    Certification: deployedCertification.address
-  };
-
-  // Ensure the output directory exists
-  const outputDir = path.join(__dirname, '../build/contract');
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
+  // Create build directory if not exists
+  const buildDir = path.join(__dirname, '../build/contract');
+  if (!fs.existsSync(buildDir)) {
+    fs.mkdirSync(buildDir, { recursive: true });
   }
 
-  const configPath = path.join(outputDir, 'deployment_config.json');
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-  console.log(`Certification contract deployed at address: ${deployedCertification.address}`);
+  // Write deployment config
+  const config = {
+    Certification: instance.address
+  };
+
+  fs.writeFileSync(
+    path.join(buildDir, 'deployment_config.json'),
+    JSON.stringify(config, null, 2)
+  );
+
+  console.log('Contract deployed at:', instance.address);
 };

@@ -5,32 +5,53 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const providerURL = process.env.PROVIDER_URL || 'http://127.0.0.1:8545';
-const web3 = new Web3(providerURL);
+// Configure provider
+const providerURL = process.env.PROVIDER_URL || 'http://localhost:8545';
+const web3 = new Web3(new Web3.providers.HttpProvider(providerURL));
 
-// Load Certification contract ABI from the build folder
-const certificationJsonPath = path.join(process.cwd(), 'build/contract/Certification.json');
-let contractABI = [];
+// Verify contract ABI structure
+const verifyABI = (abi) => {
+  const getCertificateMethod = abi.find(m =>
+    m.name === 'getCertificate' && m.type === 'function'
+  );
+
+  if (!getCertificateMethod?.outputs?.every(o => o.type === 'string')) {
+    throw new Error('Invalid ABI structure - rebuild contracts');
+  }
+};
+
+// Load contract with validation
+let contract;
 try {
-  const certificationData = JSON.parse(fs.readFileSync(certificationJsonPath, 'utf8'));
-  contractABI = certificationData.abi;
-  console.log("Loaded Certification ABI methods:", contractABI.map(method => method.name));
+  const certPath = path.join(process.cwd(), 'build/contract/Certification.json');
+  const { abi } = JSON.parse(fs.readFileSync(certPath, 'utf8'));
+  verifyABI(abi);
+
+  const deployPath = path.join(process.cwd(), 'build/contract/deployment_config.json');
+  const { Certification: address } = JSON.parse(fs.readFileSync(deployPath, 'utf8'));
+
+  contract = new web3.eth.Contract(abi, address);
+  console.log('Contract initialized at:', address);
 } catch (error) {
-  console.error('Error reading Certification contract ABI:', error);
+  console.error('Contract initialization failed:', error);
+  process.exit(1);
 }
 
-// Get contract address from deployment config
-const deploymentConfigPath = path.join(process.cwd(), 'build/contract/deployment_config.json');
-let contractAddress = '';
-try {
-  const addressData = JSON.parse(fs.readFileSync(deploymentConfigPath, 'utf8'));
-  contractAddress = addressData.Certification;
-  console.log("Using Certification contract address:", contractAddress);
-} catch (error) {
-  console.error('Error reading deployment_config.json:', error);
-}
+// Verify connection
+const verifyConnection = async () => {
+  try {
+    const [account] = await web3.eth.getAccounts();
+    const code = await web3.eth.getCode(contract.options.address);
 
-// Create contract instance
-const contract = new web3.eth.Contract(contractABI, contractAddress);
+    if (code === '0x') throw new Error('Contract not deployed');
+    console.log('Blockchain connection verified');
+
+  } catch (error) {
+    console.error('Connection failed:', error);
+    process.exit(1);
+  }
+};
+
+verifyConnection();
 
 export { web3, contract };

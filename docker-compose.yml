@@ -1,23 +1,40 @@
-version: "3"
+version: "3.8"
+
 services:
   ganache:
-    image: omkarpatange/cvs-ganche:tagname
-    build:
-      context: .
-      dockerfile: Dockerfile.ganache
+    image: trufflesuite/ganache:latest
+    container_name: ganache
+    command:
+      - --wallet.deterministic
+      - --chain.hardfork=london
+      - --networkId=5777
+      - --host=0.0.0.0
+      - --port=8545
     ports:
       - "8545:8545"
     volumes:
       - blockchain_data:/app/db
+    networks:
+      - verifyhub-net
 
   truffle:
     build:
       context: .
       dockerfile: Dockerfile.truffle
+    container_name: truffle
+    environment:
+      - PROVIDER_URL=http://ganache:8545
     depends_on:
       - ganache
     volumes:
+      - ./build/contract:/app/build/contract
       - blockchain_data:/app/db
+    networks:
+      - verifyhub-net
 
 volumes:
   blockchain_data:
+
+networks:
+  verifyhub-net:
+    driver: bridge

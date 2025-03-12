@@ -1,28 +1,18 @@
-# Dockerfile.truffle
 FROM node:16
-
 WORKDIR /app
-
-# Install netcat for wait-for-it
+# Install netcat to use wait-for-it
 RUN apt-get update && apt-get install -y netcat
-
 # Install Truffle globally
 RUN npm install -g truffle
-
 # Copy package files and install dependencies
 COPY package*.json ./
 RUN npm install
-
-# Copy the rest of the project
+# Copy the entire project
 COPY . .
-
-# Copy wait-for-it script and make it executable
+# Copy wait-for-it and entrypoint scripts, make them executable
 COPY wait-for-it.sh /app/wait-for-it.sh
 RUN chmod +x /app/wait-for-it.sh
-
-# Copy the entrypoint script and make it executable
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
-
-# Set the entrypoint to our script
+# Set entrypoint to run our script
 ENTRYPOINT ["/app/entrypoint.sh"]

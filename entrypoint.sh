@@ -1,14 +1,9 @@
-#!/usr/bin/env bash
-set -e
-
-echo "Waiting for ganache on ganache:8545 with a 60s timeout..."
+#!/bin/bash
+# Wait for Ganache to be available on port 8545
 /app/wait-for-it.sh ganache:8545 -t 60
-
-echo "Ganache is up. Running Truffle compile..."
-npx truffle compile --config truffle-config.cjs
-
-echo "Running Truffle migration..."
-npx truffle migrate --reset --network development --config truffle-config.cjs
-
-echo "Migrations complete. Keeping container running..."
+# Compile contracts using the CommonJS config
+truffle compile --config truffle-config.cjs
+# Migrate (deploy) contracts to Ganache
+truffle migrate --reset --network development --config truffle-config.cjs
+# Keep container running
 tail -f /dev/null

@@ -8,7 +8,7 @@ services:
     ports:
       - "8545:8545"
     volumes:
-      - blockchain_data:/app
+      - blockchain_data:/app/db
 
   truffle:
     build:
@@ -17,7 +17,7 @@ services:
     depends_on:
       - ganache
     volumes:
-      - blockchain_data:/app
+      - blockchain_data:/app/db
 
 volumes:
   blockchain_data:

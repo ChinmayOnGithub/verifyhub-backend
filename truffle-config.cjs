@@ -1,15 +1,15 @@
 module.exports = {
   networks: {
     development: {
-      host: "127.0.0.1", // Adjust if needed; if running via Docker, use the service name "ganache"
+      host: "ganache",  // Docker service name
       port: 8545,
-      network_id: "*"    // Match any network id
+      network_id: "*",
+      gas: 6721975
     }
   },
   compilers: {
     solc: {
-      version: "0.8.13"
+      version: "^0.8.13"
     }
-  },
-  contracts_build_directory: "./build/contract"
+  }
 };

@@ -122,11 +122,19 @@ export const verifyCertificatePdf = async (req, res) => {
 export const verifyCertificateById = async (req, res) => {
   try {
     const certificateId = req.params.certificateId;
+
+    // First, check if the certificate exists on-chain.
+    const exists = await contract.methods.isVerified(certificateId).call();
+    if (!exists) {
+      return res.status(404).json({ error: "Certificate not found on blockchain" });
+    }
+
+    // Then, call getCertificate.
     const result = await contract.methods.getCertificate(certificateId).call();
     const ipfsHash = result[4];
 
     if (!ipfsHash) {
-      return res.status(404).json({ error: 'Certificate not found on blockchain' });
+      return res.status(404).json({ error: "Certificate not found on blockchain" });
     }
 
     const contentUrl = `${PINATA_GATEWAY_BASE_URL}/${ipfsHash}`;
@@ -141,3 +149,4 @@ export const verifyCertificateById = async (req, res) => {
     res.status(500).json({ error: 'Certificate retrieval failed', details: error.toString() });
   }
 };
+

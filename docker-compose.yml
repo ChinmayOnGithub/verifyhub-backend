@@ -1,4 +1,4 @@
-# version: "3"
+version: "3"
 services:
   ganache:
     image: omkarpatange/cvs-ganche:tagname
@@ -10,18 +10,14 @@ services:
     volumes:
       - blockchain_data:/app
 
-
-  # streamlit-app:
-  #   image: omkarpatange/cvs-streamlitapp:tagname
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile.streamlit
-  #   ports:
-  #     - "8501:8501"
-  #   depends_on:
-  #     - ganache
-  #   volumes:
-  #     - blockchain_data:/app
+  truffle:
+    build:
+      context: .
+      dockerfile: Dockerfile.truffle
+    depends_on:
+      - ganache
+    volumes:
+      - blockchain_data:/app
 
 volumes:
   blockchain_data:

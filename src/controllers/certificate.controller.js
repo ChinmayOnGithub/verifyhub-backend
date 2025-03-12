@@ -47,18 +47,42 @@ export const generateCertificate = async (req, res) => {
 
     // Interact with blockchain smart contract
     const accounts = await web3.eth.getAccounts();
-    await contract.methods
+    const tx = await contract.methods
       .generateCertificate(certificateId, uid, candidateName, courseName, orgName, ipfsHash)
-      .send({ from: accounts[0] });
+      .send({
+        from: accounts[0],
+        gas: 500000,
+        gasPrice: web3.utils.toWei('20', 'gwei')
+      });
 
     // Optionally store certificate record in MongoDB
     const certificateRecord = new Certificate({ certificateId, uid, candidateName, courseName, orgName, ipfsHash });
     await certificateRecord.save();
 
-    res.status(200).json({ message: 'Certificate generated successfully', certificateId });
+    // Build transaction details, converting any BigInt values to string
+    const txDetails = {
+      transactionHash: tx.transactionHash,
+      gasUsed: tx.gasUsed ? tx.gasUsed.toString() : undefined,
+      blockNumber: tx.blockNumber ? tx.blockNumber.toString() : undefined,
+      from: accounts[0]
+    };
+
+    // Respond with detailed certificate information
+    res.status(200).json({
+      message: 'Certificate generated successfully',
+      certificate: {
+        certificateId,
+        uid,
+        candidateName,
+        courseName,
+        orgName,
+        ipfsHash
+      },
+      transaction: txDetails
+    });
   } catch (error) {
     console.error('Error generating certificate:', error);
-    res.status(500).json({ error: 'Certificate generation failed', error });
+    res.status(500).json({ error: 'Certificate generation failed', details: error.toString() });
   }
 };
 
@@ -79,13 +103,16 @@ export const verifyCertificatePdf = async (req, res) => {
 
     const isVerified = await contract.methods.isVerified(certificateId).call();
     if (isVerified) {
-      return res.status(200).json({ message: 'Certificate validated successfully', certificateId });
+      return res.status(200).json({
+        message: 'Certificate validated successfully',
+        certificate: { certificateId, uid, candidateName, courseName, orgName }
+      });
     } else {
       return res.status(400).json({ error: 'Invalid or tampered certificate' });
     }
   } catch (error) {
     console.error('Error verifying certificate by PDF:', error);
-    res.status(500).json({ error: 'Certificate verification failed' });
+    res.status(500).json({ error: 'Certificate verification failed', details: error.toString() });
   }
 };
 
@@ -111,6 +138,6 @@ export const verifyCertificateById = async (req, res) => {
     return res.send(response.data);
   } catch (error) {
     console.error('Error verifying certificate by ID:', error);
-    res.status(500).json({ error: 'Certificate retrieval failed' });
+    res.status(500).json({ error: 'Certificate retrieval failed', details: error.toString() });
   }
 };

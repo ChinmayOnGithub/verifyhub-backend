@@ -1,47 +1,60 @@
-// generates pdf out of the data provided
-export const generateCertificatePdf = (
+import PDFDocument from 'pdfkit';
+import blobStream from 'blob-stream';
+import fs from 'fs';
+import path from 'path';
+
+export const generateCertificatePdf = async (
   outputPath,
-  certificateId, // New parameter
   uid,
   candidateName,
   courseName,
   orgName,
-  instituteLogoPath
+  logoPath
 ) => {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'LETTER' });
-    const writeStream = fs.createWriteStream(outputPath);
-    doc.pipe(writeStream);
+    try {
+      // Create PDF document
+      const doc = new PDFDocument({
+        size: 'A4',
+        margins: { top: 50, bottom: 50, left: 50, right: 50 }
+      });
 
-    // Add institute logo if exists
-    if (instituteLogoPath && fs.existsSync(instituteLogoPath)) {
-      doc.image(instituteLogoPath, 50, 45, { width: 100 });
-      doc.moveDown(2);
+      // Setup write stream
+      const stream = fs.createWriteStream(outputPath);
+      doc.pipe(stream);
+
+      // Add certificate content
+      if (logoPath && fs.existsSync(logoPath)) {
+        doc.image(logoPath, 50, 50, { width: 100 });
+      }
+
+      doc.fontSize(24)
+        .text('Certificate of Completion', { align: 'center' })
+        .moveDown(1);
+
+      doc.fontSize(18)
+        .text(`This is to certify that ${candidateName}`, { align: 'center' })
+        .moveDown(0.5);
+
+      doc.fontSize(16)
+        .text(`has successfully completed the ${courseName}`, { align: 'center' })
+        .moveDown(0.5);
+
+      doc.fontSize(16)
+        .text(`offered by ${orgName}`, { align: 'center' })
+        .moveDown(2);
+
+      doc.fontSize(12)
+        .text(`Certificate ID: ${uid}`, { align: 'left' })
+        .text(`Date: ${new Date().toLocaleDateString()}`, { align: 'right' });
+
+      // Finalize PDF
+      doc.end();
+
+      stream.on('finish', () => resolve(outputPath));
+      stream.on('error', reject);
+    } catch (error) {
+      reject(error);
     }
-
-    // Certificate ID Section
-    doc.fontSize(12)
-      .text(`Certificate ID: ${certificateId}`, { align: 'left' })
-      .moveDown(1);
-
-    // Organization Section
-    doc.fontSize(18)
-      .text(`Organization: ${orgName}`, { align: 'center' })
-      .moveDown(1);
-
-    // Title
-    doc.fontSize(22)
-      .text('CERTIFICATE OF COMPLETION', { align: 'center' })
-      .moveDown(2);
-
-    // Details
-    doc.fontSize(14)
-      .text(`Candidate Name: ${candidateName}`, { align: 'left' })
-      .text(`UID: ${uid}`, { align: 'left' })
-      .text(`Course Name: ${courseName}`, { align: 'left' });
-
-    doc.end();
-    writeStream.on('finish', resolve);
-    writeStream.on('error', reject);
   });
 };

@@ -15,29 +15,49 @@ const IPFS_GATEWAYS = [
 
 export const uploadToPinata = async (filePath) => {
   try {
-    const form = new FormData();
-    form.append('file', fs.createReadStream(filePath));
-    form.append('pinataOptions', JSON.stringify({ cidVersion: 1 }));
+    const apiKey = process.env.PINATA_API_KEY;
+    const apiSecret = process.env.PINATA_API_SECRET;
 
-    const { data } = await axios.post(PINATA_API_URL, form, {
-      maxBodyLength: Infinity,
-      headers: {
-        ...form.getHeaders(),
-        pinata_api_key: process.env.PINATA_API_KEY,
-        pinata_secret_api_key: process.env.PINATA_API_SECRET
-      }
-    });
+    console.log('Pinata API Key:', apiKey); // Should match c60213b1e6f1a734c90b
+    console.log('Pinata API Secret:', apiSecret ? '[REDACTED]' : 'MISSING'); // Check if loaded
 
-    if (!data.IpfsHash?.startsWith('Qm')) {
-      throw new Error('Invalid IPFS hash response');
+    if (!apiKey || !apiSecret) {
+      throw new Error('Pinata API credentials not set in environment variables');
     }
 
-    console.log('IPFS Upload Successful:', data.IpfsHash);
-    return data.IpfsHash;
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`File does not exist: ${filePath}`);
+    }
+    console.log('Uploading file:', filePath, 'Size:', fs.statSync(filePath).size);
 
+    const data = new FormData();
+    data.append('file', fs.createReadStream(filePath));
+    console.log('FormData headers:', data.getHeaders());
+
+    const response = await axios.post(PINATA_API_URL, data, {
+      maxContentLength: Infinity, // Updated to Infinity (no quotes)
+      headers: {
+        ...data.getHeaders(),
+        pinata_api_key: apiKey,
+        pinata_secret_api_key: apiSecret
+      }
+    }).catch(err => {
+      console.error('Axios error:', err.response?.data || err.message);
+      throw err;
+    });
+
+    console.log('Pinata response:', response.data);
+
+    if (response.data && response.data.IpfsHash) {
+      console.log(`File uploaded to Pinata. IPFS Hash: ${response.data.IpfsHash}`);
+      return response.data.IpfsHash;
+    } else {
+      console.error('Unexpected Pinata response:', response.data);
+      return null;
+    }
   } catch (error) {
-    console.error('IPFS Upload Failed:', error.response?.data || error.message);
-    throw new Error(`IPFS upload failed: ${error.message}`);
+    console.error('Error in uploadToPinata:', error.message);
+    return null;
   }
 };
 
@@ -64,4 +84,21 @@ export const retrieveFromIPFS = async (ipfsHash) => {
   }
 
   throw new Error('All IPFS gateways failed');
+};
+
+// Add to pinata.js
+export const verifyPinataAuth = async () => {
+  try {
+    const response = await axios.get(PINATA_AUTH_TEST_URL, {
+      headers: {
+        'x-pinata-api-key': process.env.PINATA_API_KEY,
+        'x-pinata-secret-api-key': process.env.PINATA_API_SECRET
+      }
+    });
+    console.log('Pinata Auth Valid:', response.data);
+    return true;
+  } catch (error) {
+    console.error('Pinata Auth Failed:', error.response?.data || error.message);
+    return false;
+  }
 };

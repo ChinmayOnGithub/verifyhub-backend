@@ -1,252 +1,3 @@
-// // src/controllers/certificateController.js
-// import fs from 'fs';
-// import path from 'path';
-// import crypto from 'crypto';
-// import axios from 'axios';
-// import { generateCertificatePdf } from '../utils/pdfUtils.js';
-// import * as pinata from '../utils/pinata.js';
-// import { contract, web3 } from '../utils/blockchain.js';
-// import { PINATA_GATEWAY_BASE_URL } from '../constants.js';
-// import Certificate from '../models/certificate.model.js';
-// import { extractCertificate } from '../utils/pdfReaderUtils.js';
-
-
-// const validateCertificateData = (data) => {
-//   if (!Array.isArray(data) || data.length < 5) {
-//     throw new Error('Invalid certificate data structure');
-//   }
-//   return data;
-// };
-
-// // Helper function for standardized hashing
-// const generateCertificateHash = (uid, candidateName, courseName, orgName) => {
-//   const cleanData = [
-//     uid.trim(),
-//     candidateName.trim().toLowerCase(),
-//     courseName.trim().toLowerCase(),
-//     orgName.trim().toLowerCase()
-//   ].join('|');
-//   return crypto.createHash('sha256').update(cleanData).digest('hex');
-// };
-
-
-// export const generateCertificate = async (req, res) => {
-//   try {
-//     const { uid, candidateName, courseName, orgName } = req.body;
-
-//     // Validate input
-//     const missingFields = [];
-//     if (!uid) missingFields.push('uid');
-//     if (!candidateName) missingFields.push('candidateName');
-//     if (!courseName) missingFields.push('courseName');
-//     if (!orgName) missingFields.push('orgName');
-//     if (missingFields.length > 0) {
-//       return res.status(400).json({
-//         error: 'Missing required fields',
-//         missing: missingFields
-//       });
-//     }
-
-//     // Generate PDF
-//     const outputDir = path.resolve('uploads');
-//     if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
-//     const pdfFilePath = path.join(outputDir, `certificate_${Date.now()}.pdf`);
-//     const instituteLogoPath = path.resolve('public/assets/logo.jpg');
-
-//     await generateCertificatePdf(
-//       pdfFilePath,
-//       uid,
-//       candidateName,
-//       courseName,
-//       orgName,
-//       fs.existsSync(instituteLogoPath) ? instituteLogoPath : null
-//     );
-
-//     // Upload to IPFS via Pinata
-//     const ipfsHash = await pinata.uploadToPinata(pdfFilePath);
-//     fs.unlinkSync(pdfFilePath); // Cleanup
-
-//     if (!ipfsHash) {
-//       return res.status(500).json({ error: 'IPFS upload failed' });
-//     }
-
-//     // Generate certificate ID
-//     const certificateId = generateCertificateHash(uid, candidateName, courseName, orgName);
-
-//     // Blockchain interaction: store certificate on-chain
-//     const accounts = await web3.eth.getAccounts();
-//     const tx = await contract.methods
-//       .generateCertificate(
-//         certificateId,
-//         uid,
-//         candidateName,
-//         courseName,
-//         orgName,
-//         ipfsHash
-//       )
-//       .send({
-//         from: accounts[0],
-//         gas: 500000,
-//         gasPrice: web3.utils.toWei('20', 'gwei')
-//       });
-
-//     // Optional: Save certificate record in MongoDB
-//     try {
-//       const certRecord = new Certificate({
-//         certificateId,
-//         uid,
-//         candidateName,
-//         courseName,
-//         orgName,
-//         ipfsHash
-//       });
-//       await certRecord.save();
-//     } catch (dbError) {
-//       console.error('Database save failed:', dbError);
-//       // Continue since blockchain is source of truth
-//     }
-
-//     // Prepare response
-//     const response = {
-//       message: 'Certificate generated successfully',
-//       certificate: {
-//         certificateId,
-//         uid,
-//         candidateName,
-//         courseName,
-//         orgName,
-//         ipfsHash
-//       },
-//       transaction: {
-//         transactionHash: tx.transactionHash,
-//         blockNumber: tx.blockNumber?.toString(),
-//         gasUsed: tx.gasUsed?.toString(),
-//         from: accounts[0]
-//       }
-//     };
-
-//     res.status(201).json(response);
-//   } catch (error) {
-//     console.error('Generation Error:', error);
-//     res.status(500).json({
-//       error: 'Certificate generation failed',
-//       details: error.message,
-//       ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
-//     });
-//   }
-// };
-
-// // PDF Verification
-// export const verifyCertificatePdf = async (req, res) => {
-//   try {
-//     const { path: filePath } = req.file || {};
-//     if (!filePath) return res.status(400).json({ error: 'No PDF uploaded' });
-
-//     try {
-//       const pdfData = await extractCertificate(filePath);
-//       const { uid, candidateName, courseName, orgName } = pdfData;
-//       const certificateId = generateCertificateHash(uid, candidateName, courseName, orgName);
-
-//       const exists = await contract.methods.isVerified(certificateId).call();
-//       if (!exists) return res.status(404).json({ error: 'Certificate not found' });
-
-//       const response = await contract.methods.getCertificate(certificateId).call();
-
-//       // Convert to array if needed (web3@1.x vs web3@4.x compatibility)
-//       const certificateData = Array.isArray(response) ? response : Object.values(response);
-
-//       const [
-//         chainUID,
-//         chainCandidateName,
-//         chainCourseName,
-//         chainOrgName,
-//         chainIPFS
-//       ] = certificateData;
-
-//       if (
-//         chainUID !== uid ||
-//         chainCandidateName !== candidateName ||
-//         chainCourseName !== courseName ||
-//         chainOrgName !== orgName
-//       ) {
-//         return res.status(409).json({
-//           error: 'Data mismatch',
-//           certificateId,
-//           pdfData: { uid, candidateName, courseName, orgName },
-//           chainData: { chainUID, chainCandidateName, chainCourseName, chainOrgName }
-//         });
-//       }
-
-//       return res.status(200).json({
-//         message: 'Verification successful',
-//         certificate: {
-//           certificateId,
-//           uid,
-//           candidateName,
-//           courseName,
-//           orgName,
-//           ipfsHash: chainIPFS
-//         }
-//       });
-
-//     } finally {
-//       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-//     }
-
-//   } catch (error) {
-//     console.error('Verification error:', error);
-//     return res.status(500).json({
-//       error: 'Verification failed',
-//       details: error.message
-//     });
-//   }
-// };
-
-// // ID Verification
-// export const verifyCertificateById = async (req, res) => {
-//   try {
-//     const { certificateId } = req.params;
-
-//     if (!/^[a-f0-9]{64}$/.test(certificateId)) {
-//       return res.status(400).json({ error: 'Invalid certificate ID' });
-//     }
-
-//     const exists = await contract.methods.isVerified(certificateId).call();
-//     if (!exists) return res.status(404).json({ error: 'Certificate not found' });
-
-//     const response = await contract.methods.getCertificate(certificateId).call();
-//     const certificateData = Array.isArray(response) ? response : Object.values(response);
-
-//     const ipfsHash = certificateData[4]; // Direct array access
-
-//     if (!ipfsHash?.startsWith('Qm')) {
-//       return res.status(500).json({ error: 'Invalid IPFS hash format' });
-//     }
-
-//     const pdfResponse = await axios.get(`${PINATA_GATEWAY_BASE_URL}/${ipfsHash}`, {
-//       responseType: 'arraybuffer',
-//       timeout: 10000
-//     });
-
-//     return res
-//       .set({
-//         'Content-Type': 'application/pdf',
-//         'Content-Disposition': `inline; filename="certificate_${certificateId}.pdf"`
-//       })
-//       .send(pdfResponse.data);
-
-//   } catch (error) {
-//     console.error('ID verification error:', error);
-//     return res.status(500).json({
-//       error: 'Verification failed',
-//       details: error.message
-//     });
-//   }
-// };
-
-
-
-
 // src/controllers/certificateController.js
 import fs from 'fs';
 import path from 'path';
@@ -376,7 +127,7 @@ export const generateCertificate = async (req, res) => {
 export const verifyCertificatePdf = async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: 'No PDF file uploaded' });
+      return res.status(400).json({ error: 'No PDF file uploaded. Expected field name: "file"' });
     }
 
     const filePath = req.file.path;
@@ -386,17 +137,19 @@ export const verifyCertificatePdf = async (req, res) => {
       pdfData = await extractCertificate(filePath);
       console.log('Extracted PDF data:', pdfData);
     } catch (extractError) {
-      console.error('PDF extraction failed:', extractError);
+      console.error('PDF extraction error:', extractError.message);
       return res.status(400).json({
-        error: 'Invalid PDF format',
+        error: 'Failed to extract certificate data from PDF',
         details: extractError.message
       });
     } finally {
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        console.log('Temporary file deleted:', filePath);
+      }
     }
 
-    // Validate extracted data
-    const { uid, candidateName, courseName, orgName } = pdfData;
+    const { uid, candidateName, courseName, orgName } = pdfData || {};
     const missingFields = [];
     if (!uid) missingFields.push('uid');
     if (!candidateName) missingFields.push('candidateName');
@@ -404,61 +157,85 @@ export const verifyCertificatePdf = async (req, res) => {
     if (!orgName) missingFields.push('orgName');
 
     if (missingFields.length > 0) {
+      console.log('Missing fields in extracted data:', missingFields);
       return res.status(400).json({
         error: 'PDF missing required fields',
-        missing: missingFields
+        missing: missingFields,
+        extractedData: pdfData
       });
     }
 
-    // Generate certificate ID
     const certificateId = generateCertificateHash(uid, candidateName, courseName, orgName);
     console.log('Generated certificateId:', certificateId);
 
-    // Blockchain verification
-    let onChainData;
-    try {
-      const exists = await contract.methods.isVerified(certificateId).call();
-      if (!exists) {
-        return res.status(404).json({
-          error: 'Certificate not found on blockchain',
-          certificateId
-        });
-      }
-
-      onChainData = await contract.methods.getCertificate(certificateId).call();
-      console.log('Blockchain data:', onChainData);
-    } catch (blockchainError) {
-      console.error('Blockchain Error:', blockchainError);
-      return res.status(503).json({
-        error: 'Blockchain service unavailable',
-        details: blockchainError.message
+    const exists = await contract.methods.isVerified(certificateId).call();
+    if (!exists) {
+      console.log('Certificate not found on blockchain for ID:', certificateId);
+      return res.status(404).json({
+        error: 'Certificate not found on blockchain',
+        certificateId
       });
     }
 
-    // Map on-chain data (array to object for clarity)
-    const onChain = {
-      uid: onChainData[0],
-      candidateName: onChainData[1],
-      courseName: onChainData[2],
-      orgName: onChainData[3],
-      ipfsHash: onChainData[4]
-    };
+    const certificateData = await contract.methods.getCertificate(certificateId).call();
+    console.log('Raw blockchain data:', certificateData);
 
-    // Data consistency check
+    let onChainUid, onChainCandidateName, onChainCourseName, onChainOrgName, onChainIpfsHash, onChainTimestamp;
+    if (Array.isArray(certificateData)) {
+      [onChainUid, onChainCandidateName, onChainCourseName, onChainOrgName, onChainIpfsHash, onChainTimestamp] = certificateData;
+    } else if (certificateData && typeof certificateData === 'object') {
+      onChainUid = certificateData.uid;
+      onChainCandidateName = certificateData.candidateName;
+      onChainCourseName = certificateData.courseName;
+      onChainOrgName = certificateData.orgName;
+      onChainIpfsHash = certificateData.ipfsHash;
+      onChainTimestamp = certificateData.timestamp;
+    } else {
+      throw new Error('Unexpected blockchain data format');
+    }
+
+    // Validate blockchain data
+    const missingOnChainFields = [];
+    if (onChainUid === undefined) missingOnChainFields.push('uid');
+    if (onChainCandidateName === undefined) missingOnChainFields.push('candidateName');
+    if (onChainCourseName === undefined) missingOnChainFields.push('courseName');
+    if (onChainOrgName === undefined) missingOnChainFields.push('orgName');
+    if (onChainIpfsHash === undefined) missingOnChainFields.push('ipfsHash');
+    if (onChainTimestamp === undefined) missingOnChainFields.push('timestamp');
+
+    if (missingOnChainFields.length > 0) {
+      console.log('Missing fields in blockchain data:', missingOnChainFields);
+      return res.status(500).json({
+        error: 'Incomplete blockchain data',
+        details: `Missing fields: ${missingOnChainFields.join(', ')}`,
+        certificateId
+      });
+    }
+
+    // Data consistency check with nullish coalescing
     const isConsistent = (
-      onChain.uid === uid &&
-      onChain.candidateName.trim().toLowerCase() === candidateName.trim().toLowerCase() &&
-      onChain.courseName.trim().toLowerCase() === courseName.trim().toLowerCase() &&
-      onChain.orgName.trim().toLowerCase() === orgName.trim().toLowerCase()
+      (onChainUid || '').trim() === (uid || '').trim() &&
+      (onChainCandidateName || '').trim().toLowerCase() === (candidateName || '').trim().toLowerCase() &&
+      (onChainCourseName || '').trim().toLowerCase() === (courseName || '').trim().toLowerCase() &&
+      (onChainOrgName || '').trim().toLowerCase() === (orgName || '').trim().toLowerCase()
     );
 
     if (!isConsistent) {
+      console.log('Data mismatch:', {
+        pdf: { uid, candidateName, courseName, orgName },
+        blockchain: { onChainUid, onChainCandidateName, onChainCourseName, onChainOrgName }
+      });
       return res.status(409).json({
         error: 'Data mismatch',
         details: 'PDF content does not match blockchain records',
         certificateId,
         pdfData: { uid, candidateName, courseName, orgName },
-        blockchainData: onChain
+        blockchainData: {
+          uid: onChainUid,
+          candidateName: onChainCandidateName,
+          courseName: onChainCourseName,
+          orgName: onChainOrgName
+        }
       });
     }
 
@@ -470,7 +247,8 @@ export const verifyCertificatePdf = async (req, res) => {
         candidateName,
         courseName,
         orgName,
-        ipfsHash: onChain.ipfsHash
+        ipfsHash: onChainIpfsHash,
+        timestamp: Number(onChainTimestamp)
       },
       verification: {
         blockchainConfirmed: true,
@@ -480,6 +258,21 @@ export const verifyCertificatePdf = async (req, res) => {
 
   } catch (error) {
     console.error('Verification by PDF Error:', error);
+
+    if (error instanceof multer.MulterError) {
+      if (error.code === 'LIMIT_UNEXPECTED_FILE') {
+        console.log('Multer unexpected field:', error.field);
+        return res.status(400).json({
+          error: 'Unexpected field in upload',
+          details: `Expected field name "file", got "${error.field || 'unknown'}"`
+        });
+      }
+      return res.status(400).json({
+        error: 'File upload error',
+        details: error.message
+      });
+    }
+
     res.status(500).json({
       error: 'Verification process failed',
       details: error.message,

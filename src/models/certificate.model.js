@@ -1,4 +1,4 @@
-// src/models/Certificate.js
+// src/models/certificate.model.js
 import mongoose from 'mongoose';
 
 const CertificateSchema = new mongoose.Schema(

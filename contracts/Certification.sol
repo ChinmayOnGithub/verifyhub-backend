@@ -75,11 +75,12 @@ contract Certification {
             bool revoked
         )
     {
-        require(
-            bytes(certificates[certificateId].ipfsHash).length != 0,
-            "Certificate not found"
-        );
         Certificate memory c = certificates[certificateId];
+        require(bytes(c.uid).length != 0, "Certificate not found"); // Changed check to uid
+        // require(
+        //     bytes(certificates[certificateId].ipfsHash).length != 0,
+        //     "Certificate not found"
+        // );
         return (
             c.uid,
             c.candidateName,
@@ -93,15 +94,14 @@ contract Certification {
 
     function isVerified(string memory certificateId) public view returns (bool) {
         Certificate memory c = certificates[certificateId];
-        return bytes(c.ipfsHash).length != 0 && !c.revoked;
+        return bytes(c.uid).length != 0 && !c.revoked; 
+        // Changed check to uid
     }
 
     function revokeCertificate(string memory certificateId) public onlyOwner {
-        require(
-            bytes(certificates[certificateId].ipfsHash).length != 0,
-            "Certificate not found"
-        );
-        require(!certificates[certificateId].revoked, "Already revoked");
+        Certificate memory c = certificates[certificateId];
+        require(bytes(c.uid).length != 0, "Certificate not found"); // Changed check to uid
+        require(!c.revoked, "Already revoked");
         
         certificates[certificateId].revoked = true;
         emit CertificateRevoked(certificateId);

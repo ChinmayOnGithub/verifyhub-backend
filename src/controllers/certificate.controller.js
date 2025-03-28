@@ -19,11 +19,14 @@ import * as pinata from '../utils/pinata.js';
 import { contract, web3 } from '../utils/blockchain.js';
 import { PINATA_GATEWAY_BASE_URL } from '../constants.js';
 import Certificate from '../models/certificate.model.js';
-import { extractCertificate } from '../utils/pdfReaderUtils.js';
+// import { extractCertificate } from '../utils/pdfReaderUtils.js';
 // import CID from 'cids';
 import { CID } from 'multiformats/cid'
 import * as Block from 'multiformats/block'
 import { sha256 } from 'multiformats/hashes/sha2'
+import { pdfUpload } from '../middlewares/fileUpload.middleware.js';
+import multer from 'multer'; // Add multer import
+import { computePDFHash, getStoredHashFromBlockchain } from '../utils/pdfHashUtils.js';
 
 BigInt.prototype.toJSON = function () { return this.toString(); };
 const BLOCK_EXPLORER_URL = 'something'
@@ -304,146 +307,9 @@ const blockchainErrorHandler = (error, certificateId) => {
   };
 };
 
-// // ======================
-// // verifyCertificateById (Final Working Version)
-// // ======================
-// export const verifyCertificateById = async (req, res) => {
-//   const { certificateId } = req.params;
-//   const verificationId = crypto.randomBytes(4).toString('hex');
-//   let certificateData = null;
-//   let isValid = false;
-
-//   try {
-//     // 1. Validate ID format
-//     if (!/^[a-f0-9]{64}$/i.test(certificateId)) {
-//       return res.status(400).json({
-//         code: 'INVALID_ID',
-//         message: 'Invalid certificate ID format',
-//         certificateId,
-//         verificationId
-//       });
-//     }
-
-//     // 2. Get blockchain data
-//     [isValid, certificateData] = await Promise.all([
-//       contract.methods.isVerified(certificateId).call(),
-//       contract.methods.getCertificate(certificateId).call()
-//     ]);
-
-//     // 3. Handle invalid certificate
-//     if (!isValid) {
-//       return res.status(404).json({
-//         code: 'CERTIFICATE_INVALID',
-//         message: 'Certificate not found or revoked',
-//         certificateId,
-//         verificationId
-//       });
-//     }
-
-//     // 4. Parse response with hybrid handling
-//     const parseCertificate = (data) => {
-//       const isArrayLike = typeof data === 'object' && data !== null && '0' in data;
-//       const isNamedResponse = data?.ipfsHash || data?._ipfs_hash;
-
-//       if (isArrayLike) {
-//         return {
-//           uid: data[0] || data._uid,
-//           candidateName: data[1] || data._candidate_name,
-//           courseName: data[2] || data._course_name,
-//           orgName: data[3] || data._org_name,
-//           ipfsHash: data[4] || data._ipfs_hash,
-//           timestamp: data[5] || data._timestamp,
-//           revoked: data[6] || data._revoked
-//         };
-//       }
-
-//       if (isNamedResponse) {
-//         return {
-//           uid: data.uid || data._uid,
-//           candidateName: data.candidateName || data._candidate_name,
-//           courseName: data.courseName || data._course_name,
-//           orgName: data.orgName || data._org_name,
-//           ipfsHash: data.ipfsHash || data._ipfs_hash,
-//           timestamp: data.timestamp || data._timestamp,
-//           revoked: data.revoked || data._revoked
-//         };
-//       }
-
-//       throw new Error('Unsupported blockchain response format');
-//     };
-
-//     // 5. Destructure parsed data
-//     const {
-//       uid,
-//       candidateName,
-//       courseName,
-//       orgName,
-//       ipfsHash,
-//       timestamp,
-//       revoked
-//     } = parseCertificate(certificateData);
-
-//     // 6. Validate critical fields
-//     if (!uid || !candidateName || !ipfsHash) {
-//       return res.status(500).json({
-//         code: 'INCOMPLETE_DATA',
-//         message: 'Certificate data missing critical fields',
-//         certificateId,
-//         verificationId,
-//         presentFields: {
-//           uid: !!uid,
-//           candidateName: !!candidateName,
-//           ipfsHash: !!ipfsHash
-//         }
-//       });
-//     }
-
-//     // 7. Validate CID format
-//     CID.parse(ipfsHash.trim());
-
-//     // 8. Return successful response
-//     res.json({
-//       status: 'VALID',
-//       certificate: {
-//         uid,
-//         candidateName,
-//         courseName,
-//         orgName,
-//         ipfsHash,
-//         timestamp: timestamp.toString(),
-//         revoked: Boolean(revoked)
-//       },
-//       verificationId,
-//       _links: {
-//         pdf: `${PINATA_GATEWAY_BASE_URL}/${ipfsHash}`,
-//         blockchain: `${BLOCK_EXPLORER_URL}/tx/${certificateId}`
-//       }
-//     });
-
-//   } catch (error) {
-//     console.error(`[${verificationId}] Verification Failed:`, error);
-
-//     const response = {
-//       code: 'VERIFICATION_FAILED',
-//       message: 'Certificate verification process failed',
-//       certificateId,
-//       verificationId,
-//       details: error.message,
-//       timestamp: new Date().toISOString()
-//     };
-
-//     if (process.env.NODE_ENV === 'development') {
-//       response.debug = {
-//         rawData: certificateData,
-//         errorStack: error.stack
-//       };
-//     }
-
-//     res.status(500).json(response);
-//   }
-// };
-
-
+// ======================
+// verifyCertificate (Fixed)
+// ======================
 export const verifyCertificateById = async (req, res) => {
   const { certificateId } = req.params;
   const verificationId = crypto.randomBytes(4).toString('hex');
@@ -551,14 +417,16 @@ export const verifyCertificateById = async (req, res) => {
   } catch (error) {
     console.error(`[${verificationId}] Verification Failed:`, error);
 
+    // const safeTimestamp = parsed.timestamp ? parsed.timestamp.toString() : Date.now().toString();
+
     const response = {
       code: 'VERIFICATION_FAILED',
       message: 'Certificate verification process failed',
       certificateId,
       verificationId,
       details: error.message,
-      timestamp: safeTimestamp,
-      issueDate: new Date(Number(safeTimestamp)).toISOString(),
+      // timestamp: safeTimestamp,
+      // issueDate: new Date(Number(safeTimestamp)).toISOString(),
       ...(process.env.NODE_ENV === 'development' && {
         debug: {
           rawData: certificateData,
@@ -691,110 +559,125 @@ const parseCertificateData = (data) => {
   };
 };
 
-// PDF Verification with Enhanced Security
+// Updated verifyCertificatePdf function
 export const verifyCertificatePdf = async (req, res) => {
   const verificationId = crypto.randomBytes(4).toString('hex');
 
   try {
-    if (!req.file) {
+    // 1. Validate file upload
+    if (!req.file || !req.file.buffer) {
       return res.status(400).json({
         code: 'MISSING_FILE',
         message: 'No PDF file uploaded',
-        expectedField: 'certificate'
-      });
-    }
-
-    const processPDF = async (filePath) => {
-      try {
-        const pdfData = await extractCertificate(filePath);
-        if (!pdfData?.uid) throw new Error('Invalid PDF structure');
-        return pdfData;
-      } finally {
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      }
-    };
-
-    const pdfData = await processPDF(req.file.path);
-    const requiredFields = ['uid', 'candidateName', 'courseName', 'orgName'];
-    const missingFields = requiredFields.filter(field => !pdfData[field]);
-
-    if (missingFields.length > 0) {
-      return res.status(400).json({
-        code: 'INCOMPLETE_PDF',
-        message: 'PDF missing required fields',
-        missingFields,
         verificationId
       });
     }
 
-    const certificateId = generateCertificateHash(
-      pdfData.uid,
-      pdfData.candidateName,
-      pdfData.courseName,
-      pdfData.orgName
-    );
+    // 2. Compute PDF hash
+    const computedHash = computePDFHash(req.file.buffer);
 
-    const [exists, blockchainData] = await Promise.all([
-      contract.methods.isVerified(certificateId).call(),
-      contract.methods.getCertificate(certificateId).call()
-    ]);
+    // 3. Get stored hash from blockchain
+    const storedHash = await getStoredHashFromBlockchain(computedHash); // Using hash as lookup key
 
-    if (!exists) {
+    // 4. Compare hashes
+    if (computedHash !== storedHash) {
+      return res.status(400).json({
+        code: 'HASH_MISMATCH',
+        message: 'PDF content does not match blockchain record',
+        verificationId,
+        computedHash,
+        storedHash
+      });
+    }
+
+    // 5. Get full certificate details
+    const certificate = await Certificate.findOne({ ipfsHash: storedHash });
+    if (!certificate) {
       return res.status(404).json({
         code: 'CERTIFICATE_NOT_FOUND',
-        message: 'Certificate not registered',
-        certificateId,
+        message: 'Hash verified but certificate record missing',
         verificationId
       });
     }
 
-    const parsedData = parseCertificateData(blockchainData);
-
-    // Case-insensitive comparison
-    const isConsistent = Object.entries(pdfData).every(([key, value]) =>
-      parsedData[key]?.toLowerCase() === value?.toLowerCase()
-    );
-
-    if (!isConsistent) {
-      return res.status(409).json({
-        code: 'DATA_MISMATCH',
-        message: 'PDF data doesn\'t match blockchain records',
-        certificateId,
-        pdfData: Object.fromEntries(
-          Object.entries(pdfData).map(([k, v]) => [k, v?.toLowerCase()])
-        ),
-        blockchainData: Object.fromEntries(
-          Object.entries(parsedData).map(([k, v]) => [k, typeof v === 'string' ? v?.toLowerCase() : v])
-        )
-      });
-    }
-
+    // 6. Successful verification response
     res.json({
       status: 'VALID',
       verificationId,
       certificate: {
-        ...parsedData,
-        timestamp: Number(parsedData.timestamp)
+        ...certificate.toObject(),
+        pdfUrl: `${PINATA_GATEWAY_BASE_URL}/${certificate.ipfsHash}`
       },
       verification: {
-        method: 'PDF_CONTENT_ANALYSIS',
+        method: 'PDF_HASH_VERIFICATION',
         blockchainConfirmed: true
       }
     });
 
   } catch (error) {
-    console.error(`[${verificationId}] PDF Verification Error:`, error);
+    console.error(`[${verificationId}] Verification Error:`, error);
 
-    const statusCode = error instanceof multer.MulterError ? 400 : 500;
+    const statusCode = error.message.includes('not found') ? 404 : 500;
     res.status(statusCode).json({
       code: 'VERIFICATION_FAILED',
-      message: 'PDF verification process failed',
+      message: error.message,
       verificationId,
-      details: error.message,
       ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
     });
   }
 };
+
+
+// export const verifyCertificate = async (req, res) => {
+//   try {
+//     const { verificationId } = req.body;
+//     const pdfFile = req.file;
+
+//     // 1. Validate input
+//     if (!pdfFile || !pdfFile.buffer) {
+//       return res.status(400).json({
+//         code: 'VALIDATION_ERROR',
+//         message: 'PDF file required for verification'
+//       });
+//     }
+
+//     // 2. Compute PDF hash
+//     const computedHash = computePDFHash(pdfFile.buffer);
+
+//     // 3. Get blockchain-stored hash
+//     const storedHash = await getStoredHashFromBlockchain(verificationId);
+
+//     // 4. Compare hashes
+//     if (computedHash !== storedHash) {
+//       return res.status(400).json({
+//         code: 'HASH_MISMATCH',
+//         message: 'PDF content does not match blockchain record',
+//         verificationId,
+//         computedHash,
+//         storedHash
+//       });
+//     }
+
+//     // 5. Return successful verification
+//     res.json({
+//       code: 'VERIFIED',
+//       message: 'Certificate authenticity confirmed',
+//       verificationId,
+//       blockHash: storedHash
+//     });
+
+//   } catch (error) {
+//     res.status(500).json({
+//       code: 'VERIFICATION_ERROR',
+//       message: error.message,
+//       verificationId: req.body.verificationId,
+//       stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+//     });
+//   }
+// };
+
+
+
 
 // Enhanced Metadata Endpoint
 export const getCertificateMetadata = async (req, res) => {

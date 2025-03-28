@@ -1,27 +1,33 @@
+// 2_deploy_certification.js
 const Certification = artifacts.require("Certification");
 const fs = require('fs');
 const path = require('path');
 
 module.exports = async function (deployer) {
-  // Deploy contract
-  await deployer.deploy(Certification);
-  const instance = await Certification.deployed();
+  try {
+    await deployer.deploy(Certification);
+    const instance = await Certification.deployed();
 
-  // Create build directory if not exists
-  const buildDir = path.join(__dirname, '../build/contract');
-  if (!fs.existsSync(buildDir)) {
-    fs.mkdirSync(buildDir, { recursive: true });
+    // Ensure build directory exists
+    const buildDir = path.join(__dirname, '../build/contract');
+    if (!fs.existsSync(buildDir)) {
+      fs.mkdirSync(buildDir, { recursive: true });
+    }
+
+    // Write deployment config
+    const config = {
+      Certification: instance.address,
+      networkId: await web3.eth.net.getId()
+    };
+
+    fs.writeFileSync(
+      path.join(buildDir, 'deployment_config.json'),
+      JSON.stringify(config, null, 2)
+    );
+
+    console.log('Contract deployed at:', instance.address);
+  } catch (error) {
+    console.error('Migration failed:', error);
+    process.exit(1);
   }
-
-  // Write deployment config
-  const config = {
-    Certification: instance.address
-  };
-
-  fs.writeFileSync(
-    path.join(buildDir, 'deployment_config.json'),
-    JSON.stringify(config, null, 2)
-  );
-
-  console.log('Contract deployed at:', instance.address);
 };

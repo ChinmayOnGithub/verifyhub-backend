@@ -1,4 +1,15 @@
 // src/controllers/certificateController.js
+/* 
+generateCertificateHash
+generateCertificate
+verifyCertificateById
+verifyCertificatePdf
+getCertificateMetadata
+uploadExternalCertificate
+searchByCID
+getCertificateStats
+getOrgCertificates
+*/
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -9,6 +20,13 @@ import { contract, web3 } from '../utils/blockchain.js';
 import { PINATA_GATEWAY_BASE_URL } from '../constants.js';
 import Certificate from '../models/certificate.model.js';
 import { extractCertificate } from '../utils/pdfReaderUtils.js';
+// import CID from 'cids';
+import { CID } from 'multiformats/cid'
+import * as Block from 'multiformats/block'
+import { sha256 } from 'multiformats/hashes/sha2'
+
+BigInt.prototype.toJSON = function () { return this.toString(); };
+const BLOCK_EXPLORER_URL = 'something'
 
 // Helper function for standardized hashing
 const generateCertificateHash = (uid, candidateName, courseName, orgName) => {
@@ -16,357 +34,1003 @@ const generateCertificateHash = (uid, candidateName, courseName, orgName) => {
   return crypto.createHash('sha256').update(normalizedData).digest('hex');
 };
 
+// generate certificate (Most imp function)
 export const generateCertificate = async (req, res) => {
+  const startTime = Date.now();
+  const generationId = crypto.randomBytes(8).toString('hex');
+
   try {
     const { uid, candidateName, courseName, orgName } = req.body;
+    const metadata = { uid, candidateName, courseName, orgName };
 
-    // Validate input
-    const missingFields = [];
-    if (!uid) missingFields.push('uid');
-    if (!candidateName) missingFields.push('candidateName');
-    if (!courseName) missingFields.push('courseName');
-    if (!orgName) missingFields.push('orgName');
+    // ======================
+    // 1. Validation Phase
+    // ======================
+    const missingFields = Object.entries(metadata)
+      .filter(([_, value]) => !value)
+      .map(([key]) => key);
 
     if (missingFields.length > 0) {
       return res.status(400).json({
-        error: 'Missing required fields',
-        missing: missingFields
+        error: {
+          code: 'MISSING_FIELDS',
+          message: 'Required fields are missing',
+          fields: missingFields,
+          documentation: 'https://api.yourservice.com/docs/certificates#required-fields'
+        },
+        meta: { generationId }
       });
     }
 
-    // Generate PDF
-    const outputDir = path.resolve('uploads');
-    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
-
-    const pdfFilePath = path.join(outputDir, `certificate_${Date.now()}.pdf`);
-    const instituteLogoPath = path.resolve('public/assets/logo.jpg');
-
-    await generateCertificatePdf(
-      pdfFilePath,
-      uid,
-      candidateName,
-      courseName,
-      orgName,
-      fs.existsSync(instituteLogoPath) ? instituteLogoPath : null
-    );
-
-    // Upload to IPFS
-    const ipfsHash = await pinata.uploadToPinata(pdfFilePath);
-    fs.unlinkSync(pdfFilePath); // Cleanup
-
-    if (!ipfsHash) {
-      return res.status(500).json({ error: 'IPFS upload failed' });
-    }
-
-    // Generate certificate ID
+    // ======================
+    // 2. Certificate ID Generation
+    // ======================
     const certificateId = generateCertificateHash(uid, candidateName, courseName, orgName);
-
-    // Blockchain interaction
-    const accounts = await web3.eth.getAccounts();
-    const tx = await contract.methods
-      .generateCertificate(
-        certificateId,
-        uid,
-        candidateName,
-        courseName,
-        orgName,
-        ipfsHash
-      )
-      .send({
-        from: accounts[0],
-        gas: 500000,
-        gasPrice: web3.utils.toWei('20', 'gwei')
-      });
-
-    // Optional MongoDB storage
-    try {
-      const certRecord = new Certificate({
-        certificateId,
-        uid,
-        candidateName,
-        courseName,
-        orgName,
-        ipfsHash
-      });
-      await certRecord.save();
-    } catch (dbError) {
-      console.error('Database save failed:', dbError);
-      // Continue since blockchain is source of truth
-    }
-
-    // Prepare response
-    const response = {
-      message: 'Certificate generated successfully',
-      certificate: {
-        certificateId,
-        uid,
-        candidateName,
-        courseName,
-        orgName,
-        ipfsHash
-      },
-      transaction: {
-        transactionHash: tx.transactionHash,
-        blockNumber: tx.blockNumber?.toString(),
-        gasUsed: tx.gasUsed?.toString(),
-        from: accounts[0]
-      }
+    const certificateData = {
+      certificateId,
+      ...metadata,
+      generationId,
+      createdAt: new Date().toISOString()
     };
 
-    res.status(201).json(response);
-  } catch (error) {
-    console.error('Generation Error:', error);
-    res.status(500).json({
-      error: 'Certificate generation failed',
-      details: error.message,
-      ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
-    });
-  }
-};
+    // ======================
+    // 3. Existence Checks
+    // ======================
+    try {
+      const [blockchainExists, dbExists] = await Promise.all([
+        contract.methods.isVerified(certificateId).call(),
+        Certificate.findOne({ certificateId }).lean()
+      ]);
 
-export const verifyCertificatePdf = async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No PDF file uploaded. Expected field name: "file"' });
+      if (blockchainExists) {
+        return res.status(409).json({
+          error: {
+            code: 'CERTIFICATE_EXISTS',
+            message: 'Certificate already exists on blockchain',
+            resolution: [
+              'If this is an update, revoke the existing certificate first',
+              'Use different metadata for new certificate'
+            ],
+            existingRecord: dbExists || null,
+            verificationUrl: `/api/certificates/${certificateId}/verify`
+          },
+          meta: certificateData
+        });
+      }
+    } catch (checkError) {
+      console.error(`[${generationId}] Existence check failed:`, checkError);
+      return res.status(500).json({
+        error: {
+          code: 'SYSTEM_CHECK_FAILED',
+          message: 'Failed to verify certificate status',
+          retry: true,
+          retryAfter: '5 minutes'
+        },
+        meta: certificateData
+      });
     }
 
-    const filePath = req.file.path;
-    let pdfData;
+    // ======================
+    // 4. PDF Generation
+    // ======================
+    const outputDir = path.resolve('uploads');
+    const pdfFilePath = path.join(outputDir, `cert_${generationId}.pdf`);
 
     try {
-      pdfData = await extractCertificate(filePath);
-      console.log('Extracted PDF data:', pdfData);
-    } catch (extractError) {
-      console.error('PDF extraction error:', extractError.message);
-      return res.status(400).json({
-        error: 'Failed to extract certificate data from PDF',
-        details: extractError.message
+      await fs.promises.mkdir(outputDir, { recursive: true });
+      await generateCertificatePdf(
+        pdfFilePath,
+        uid,
+        candidateName,
+        courseName,
+        orgName,
+        path.resolve('public/assets/logo.jpg')
+      );
+    } catch (pdfError) {
+      console.error(`[${generationId}] PDF generation failed:`, pdfError);
+      return res.status(500).json({
+        error: {
+          code: 'PDF_GENERATION_FAILED',
+          message: 'Failed to create certificate PDF',
+          details: pdfError.message,
+          temporaryFile: pdfFilePath
+        },
+        meta: certificateData
+      });
+    }
+
+    // ======================
+    // 5. IPFS Upload
+    // ======================
+    let ipfsHash;
+    try {
+      ipfsHash = await pinata.uploadToPinata(pdfFilePath);
+      new CID(ipfsHash); // Validate CID format
+    } catch (ipfsError) {
+      console.error(`[${generationId}] IPFS operation failed:`, ipfsError);
+      return res.status(502).json({
+        error: {
+          code: ipfsError instanceof CID.CIDError ? 'INVALID_CID' : 'IPFS_UPLOAD_FAILED',
+          message: 'IPFS operation failed',
+          details: ipfsError.message,
+          cid: ipfsHash || 'N/A'
+        },
+        meta: certificateData
       });
     } finally {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-        console.log('Temporary file deleted:', filePath);
-      }
+      await fs.promises.unlink(pdfFilePath).catch(() => { });
     }
 
-    const { uid, candidateName, courseName, orgName } = pdfData || {};
-    const missingFields = [];
-    if (!uid) missingFields.push('uid');
-    if (!candidateName) missingFields.push('candidateName');
-    if (!courseName) missingFields.push('courseName');
-    if (!orgName) missingFields.push('orgName');
+    // ======================
+    // 6. Blockchain Transaction (Updated)
+    // ======================
+    let txReceipt;
+    try {
+      const accounts = await web3.eth.getAccounts();
+      txReceipt = await contract.methods
+        .generateCertificate(certificateId, uid, candidateName, courseName, orgName, ipfsHash)
+        .send({
+          from: accounts[0],
+          gas: 500000,
+          gasPrice: web3.utils.toWei('20', 'gwei')
+        });
 
-    if (missingFields.length > 0) {
-      console.log('Missing fields in extracted data:', missingFields);
-      return res.status(400).json({
-        error: 'PDF missing required fields',
-        missing: missingFields,
-        extractedData: pdfData
-      });
-    }
-
-    const certificateId = generateCertificateHash(uid, candidateName, courseName, orgName);
-    console.log('Generated certificateId:', certificateId);
-
-    const exists = await contract.methods.isVerified(certificateId).call();
-    if (!exists) {
-      console.log('Certificate not found on blockchain for ID:', certificateId);
-      return res.status(404).json({
-        error: 'Certificate not found on blockchain',
-        certificateId
-      });
-    }
-
-    const certificateData = await contract.methods.getCertificate(certificateId).call();
-    console.log('Raw blockchain data:', certificateData);
-
-    let onChainUid, onChainCandidateName, onChainCourseName, onChainOrgName, onChainIpfsHash, onChainTimestamp;
-    if (Array.isArray(certificateData)) {
-      [onChainUid, onChainCandidateName, onChainCourseName, onChainOrgName, onChainIpfsHash, onChainTimestamp] = certificateData;
-    } else if (certificateData && typeof certificateData === 'object') {
-      onChainUid = certificateData.uid;
-      onChainCandidateName = certificateData.candidateName;
-      onChainCourseName = certificateData.courseName;
-      onChainOrgName = certificateData.orgName;
-      onChainIpfsHash = certificateData.ipfsHash;
-      onChainTimestamp = certificateData.timestamp;
-    } else {
-      throw new Error('Unexpected blockchain data format');
-    }
-
-    // Validate blockchain data
-    const missingOnChainFields = [];
-    if (onChainUid === undefined) missingOnChainFields.push('uid');
-    if (onChainCandidateName === undefined) missingOnChainFields.push('candidateName');
-    if (onChainCourseName === undefined) missingOnChainFields.push('courseName');
-    if (onChainOrgName === undefined) missingOnChainFields.push('orgName');
-    if (onChainIpfsHash === undefined) missingOnChainFields.push('ipfsHash');
-    if (onChainTimestamp === undefined) missingOnChainFields.push('timestamp');
-
-    if (missingOnChainFields.length > 0) {
-      console.log('Missing fields in blockchain data:', missingOnChainFields);
-      return res.status(500).json({
-        error: 'Incomplete blockchain data',
-        details: `Missing fields: ${missingOnChainFields.join(', ')}`,
-        certificateId
-      });
-    }
-
-    // Data consistency check with nullish coalescing
-    const isConsistent = (
-      (onChainUid || '').trim() === (uid || '').trim() &&
-      (onChainCandidateName || '').trim().toLowerCase() === (candidateName || '').trim().toLowerCase() &&
-      (onChainCourseName || '').trim().toLowerCase() === (courseName || '').trim().toLowerCase() &&
-      (onChainOrgName || '').trim().toLowerCase() === (orgName || '').trim().toLowerCase()
-    );
-
-    if (!isConsistent) {
-      console.log('Data mismatch:', {
-        pdf: { uid, candidateName, courseName, orgName },
-        blockchain: { onChainUid, onChainCandidateName, onChainCourseName, onChainOrgName }
-      });
-      return res.status(409).json({
-        error: 'Data mismatch',
-        details: 'PDF content does not match blockchain records',
-        certificateId,
-        pdfData: { uid, candidateName, courseName, orgName },
-        blockchainData: {
-          uid: onChainUid,
-          candidateName: onChainCandidateName,
-          courseName: onChainCourseName,
-          orgName: onChainOrgName
+      // Convert BigInt values to strings
+      txReceipt = {
+        ...txReceipt,
+        blockNumber: txReceipt.blockNumber?.toString(),
+        gasUsed: txReceipt.gasUsed?.toString(),
+        cumulativeGasUsed: txReceipt.cumulativeGasUsed?.toString()
+      };
+    } catch (blockchainError) {
+      console.error(`[${generationId}] Blockchain error:`, blockchainError);
+      return res.status(502).json({
+        error: {
+          code: 'BLOCKCHAIN_REJECTED',
+          message: 'Blockchain transaction failed',
+          reason: blockchainError.data?.message || blockchainError.message,
+          isRecoverable: false,
+          actionRequired: 'Contact support with generation ID'
+        },
+        meta: {
+          ...certificateData,
+          ipfsHash,
+          blockchainAttempted: true
         }
       });
     }
 
-    res.status(200).json({
-      message: 'Certificate verified successfully',
-      certificate: {
+    // ======================
+    // 7. Database Sync
+    // ======================
+    try {
+      await Certificate.create({
         certificateId,
         uid,
         candidateName,
         courseName,
         orgName,
-        ipfsHash: onChainIpfsHash,
-        timestamp: Number(onChainTimestamp)
+        ipfsHash,
+        blockchainTx: txReceipt.transactionHash,
+        generationMetadata: {
+          id: generationId,
+          durationMs: Date.now() - startTime,
+          nodeVersion: process.version
+        }
+      });
+    } catch (dbError) {
+      console.error(`[${generationId}] Database sync failed:`, dbError);
+      // Non-critical error, continue but notify
+    }
+    // ======================
+    // 8. Final Response (Updated)
+    // ======================
+    const networkId = (await web3.eth.net.getId()).toString(); // Convert to string
+
+    const explorerUrl = networkId === "5777" // Compare as string
+      ? `http://localhost:8545/tx/${txReceipt.transactionHash}`
+      : `https://etherscan.io/tx/${txReceipt.transactionHash}`;
+
+    res.status(201).json({
+      success: {
+        code: 'CERTIFICATE_ISSUED',
+        message: 'Certificate successfully generated',
+        timestamp: new Date().toISOString(),
+        links: {
+          verification: `${req.protocol}://${req.get('host')}/api/certificates/${certificateId}/verify`,
+          pdf: `${req.protocol}://${req.get('host')}/api/certificates/${certificateId}/pdf`,
+          blockchainExplorer: explorerUrl,
+          ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/${ipfsHash}`
+        }
       },
-      verification: {
-        blockchainConfirmed: true,
-        dataConsistent: true
+      certificate: {
+        ...certificateData,
+        ipfsHash,
+        revoked: false,
+        timestamp: Date.now()
+      },
+      transaction: {
+        hash: txReceipt.transactionHash,
+        block: txReceipt.blockNumber?.toString(), // Already safe
+        gasUsed: txReceipt.gasUsed?.toString(),   // Convert to string
+        networkId: networkId.toString()           // Ensure string
+      },
+      system: {
+        generationId,
+        durationMs: (Date.now() - startTime).toString(), // Convert to string
+        commitHash: process.env.GIT_COMMIT_HASH || 'unknown'
       }
     });
 
   } catch (error) {
-    console.error('Verification by PDF Error:', error);
-
-    if (error instanceof multer.MulterError) {
-      if (error.code === 'LIMIT_UNEXPECTED_FILE') {
-        console.log('Multer unexpected field:', error.field);
-        return res.status(400).json({
-          error: 'Unexpected field in upload',
-          details: `Expected field name "file", got "${error.field || 'unknown'}"`
-        });
+    console.error(`[${generationId}] Critical failure:`, error);
+    res.status(500).json({
+      error: {
+        code: 'UNKNOWN_FAILURE',
+        message: 'Unexpected system failure',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+        reportUrl: `https://api.yourservice.com/error-report/${generationId}`,
+        critical: true
+      },
+      meta: {
+        generationId,
+        timestamp: new Date().toISOString(),
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
       }
+    });
+  }
+};
+
+
+// Utility function for common error responses
+const blockchainErrorHandler = (error, certificateId) => {
+  console.error(`[${certificateId}] Verification Error:`, error);
+
+  const isRevert = error.data?.startsWith('0x08c379a0'); // Error selector for revert
+  const statusCode = isRevert ? 404 : 500;
+  const errorCodes = {
+    'Certificate not found': 'NOT_FOUND',
+    'Already revoked': 'REVOKED',
+    default: 'VERIFICATION_ERROR'
+  };
+
+  return {
+    statusCode,
+    error: {
+      code: errorCodes[error.reason] || errorCodes.default,
+      message: isRevert ? 'Blockchain operation reverted' : 'Verification failed',
+      details: error.reason || error.message
+    }
+  };
+};
+
+// // ======================
+// // verifyCertificateById (Final Working Version)
+// // ======================
+// export const verifyCertificateById = async (req, res) => {
+//   const { certificateId } = req.params;
+//   const verificationId = crypto.randomBytes(4).toString('hex');
+//   let certificateData = null;
+//   let isValid = false;
+
+//   try {
+//     // 1. Validate ID format
+//     if (!/^[a-f0-9]{64}$/i.test(certificateId)) {
+//       return res.status(400).json({
+//         code: 'INVALID_ID',
+//         message: 'Invalid certificate ID format',
+//         certificateId,
+//         verificationId
+//       });
+//     }
+
+//     // 2. Get blockchain data
+//     [isValid, certificateData] = await Promise.all([
+//       contract.methods.isVerified(certificateId).call(),
+//       contract.methods.getCertificate(certificateId).call()
+//     ]);
+
+//     // 3. Handle invalid certificate
+//     if (!isValid) {
+//       return res.status(404).json({
+//         code: 'CERTIFICATE_INVALID',
+//         message: 'Certificate not found or revoked',
+//         certificateId,
+//         verificationId
+//       });
+//     }
+
+//     // 4. Parse response with hybrid handling
+//     const parseCertificate = (data) => {
+//       const isArrayLike = typeof data === 'object' && data !== null && '0' in data;
+//       const isNamedResponse = data?.ipfsHash || data?._ipfs_hash;
+
+//       if (isArrayLike) {
+//         return {
+//           uid: data[0] || data._uid,
+//           candidateName: data[1] || data._candidate_name,
+//           courseName: data[2] || data._course_name,
+//           orgName: data[3] || data._org_name,
+//           ipfsHash: data[4] || data._ipfs_hash,
+//           timestamp: data[5] || data._timestamp,
+//           revoked: data[6] || data._revoked
+//         };
+//       }
+
+//       if (isNamedResponse) {
+//         return {
+//           uid: data.uid || data._uid,
+//           candidateName: data.candidateName || data._candidate_name,
+//           courseName: data.courseName || data._course_name,
+//           orgName: data.orgName || data._org_name,
+//           ipfsHash: data.ipfsHash || data._ipfs_hash,
+//           timestamp: data.timestamp || data._timestamp,
+//           revoked: data.revoked || data._revoked
+//         };
+//       }
+
+//       throw new Error('Unsupported blockchain response format');
+//     };
+
+//     // 5. Destructure parsed data
+//     const {
+//       uid,
+//       candidateName,
+//       courseName,
+//       orgName,
+//       ipfsHash,
+//       timestamp,
+//       revoked
+//     } = parseCertificate(certificateData);
+
+//     // 6. Validate critical fields
+//     if (!uid || !candidateName || !ipfsHash) {
+//       return res.status(500).json({
+//         code: 'INCOMPLETE_DATA',
+//         message: 'Certificate data missing critical fields',
+//         certificateId,
+//         verificationId,
+//         presentFields: {
+//           uid: !!uid,
+//           candidateName: !!candidateName,
+//           ipfsHash: !!ipfsHash
+//         }
+//       });
+//     }
+
+//     // 7. Validate CID format
+//     CID.parse(ipfsHash.trim());
+
+//     // 8. Return successful response
+//     res.json({
+//       status: 'VALID',
+//       certificate: {
+//         uid,
+//         candidateName,
+//         courseName,
+//         orgName,
+//         ipfsHash,
+//         timestamp: timestamp.toString(),
+//         revoked: Boolean(revoked)
+//       },
+//       verificationId,
+//       _links: {
+//         pdf: `${PINATA_GATEWAY_BASE_URL}/${ipfsHash}`,
+//         blockchain: `${BLOCK_EXPLORER_URL}/tx/${certificateId}`
+//       }
+//     });
+
+//   } catch (error) {
+//     console.error(`[${verificationId}] Verification Failed:`, error);
+
+//     const response = {
+//       code: 'VERIFICATION_FAILED',
+//       message: 'Certificate verification process failed',
+//       certificateId,
+//       verificationId,
+//       details: error.message,
+//       timestamp: new Date().toISOString()
+//     };
+
+//     if (process.env.NODE_ENV === 'development') {
+//       response.debug = {
+//         rawData: certificateData,
+//         errorStack: error.stack
+//       };
+//     }
+
+//     res.status(500).json(response);
+//   }
+// };
+
+
+export const verifyCertificateById = async (req, res) => {
+  const { certificateId } = req.params;
+  const verificationId = crypto.randomBytes(4).toString('hex');
+  let certificateData = null;
+  let isValid = false;
+
+  try {
+    // 1. Validate ID format
+    if (!/^[a-f0-9]{64}$/i.test(certificateId)) {
       return res.status(400).json({
-        error: 'File upload error',
-        details: error.message
+        code: 'INVALID_ID',
+        message: 'Invalid certificate ID format',
+        certificateId,
+        verificationId
       });
     }
 
+    // 2. Get blockchain data
+    [isValid, certificateData] = await Promise.all([
+      contract.methods.isVerified(certificateId).call(),
+      contract.methods.getCertificate(certificateId).call()
+    ]);
+
+    // 3. Handle invalid certificate
+    if (!isValid) {
+      return res.status(404).json({
+        code: 'CERTIFICATE_INVALID',
+        message: 'Certificate not found or revoked',
+        certificateId,
+        verificationId
+      });
+    }
+
+    // 4. Enhanced parser with timestamp safety
+    const parseCertificate = (data) => {
+      // Handle numeric indexes first
+      if (typeof data === 'object' && data !== null && '0' in data) {
+        return {
+          uid: data[0] || data._uid,
+          candidateName: data[1] || data._candidate_name,
+          courseName: data[2] || data._course_name,
+          orgName: data[3] || data._org_name,
+          ipfsHash: data[4] || data._ipfs_hash,
+          // Add fallback for timestamp at different positions
+          timestamp: data[5] || data.blockNumber || data._timestamp || Date.now(),
+          revoked: data[6] || data._revoked || false
+        };
+      }
+
+      // Handle named properties
+      return {
+        uid: data.uid || data._uid,
+        candidateName: data.candidateName || data._candidate_name,
+        courseName: data.courseName || data._course_name,
+        orgName: data.orgName || data._org_name,
+        ipfsHash: data.ipfsHash || data._ipfs_hash,
+        timestamp: data.timestamp || data.blockNumber || data._timestamp || Date.now(),
+        revoked: data.revoked || data._revoked || false
+      };
+    };
+
+    // 5. Parse data with safety checks
+    const parsed = parseCertificate(certificateData);
+
+    // 6. Validate required fields
+    if (!parsed.uid || !parsed.candidateName || !parsed.ipfsHash) {
+      return res.status(500).json({
+        code: 'INCOMPLETE_DATA',
+        message: 'Certificate data missing critical fields',
+        certificateId,
+        verificationId,
+        presentFields: {
+          uid: !!parsed.uid,
+          candidateName: !!parsed.candidateName,
+          ipfsHash: !!parsed.ipfsHash
+        }
+      });
+    }
+
+    // 7. Validate CID
+    CID.parse(parsed.ipfsHash.trim());
+
+    // 8. Safely handle timestamp conversion
+    const safeTimestamp = parsed.timestamp ? parsed.timestamp.toString() : Date.now().toString();
+
+    // 9. Return validated response
+    res.json({
+      status: 'VALID',
+      certificate: {
+        uid: parsed.uid,
+        candidateName: parsed.candidateName,
+        courseName: parsed.courseName,
+        orgName: parsed.orgName,
+        ipfsHash: parsed.ipfsHash,
+        timestamp: safeTimestamp,
+        revoked: Boolean(parsed.revoked)
+      },
+      verificationId,
+      _links: {
+        pdf: `${PINATA_GATEWAY_BASE_URL}/${parsed.ipfsHash}`,
+        blockchain: `${BLOCK_EXPLORER_URL}/tx/${certificateId}`
+      }
+    });
+
+  } catch (error) {
+    console.error(`[${verificationId}] Verification Failed:`, error);
+
+    const response = {
+      code: 'VERIFICATION_FAILED',
+      message: 'Certificate verification process failed',
+      certificateId,
+      verificationId,
+      details: error.message,
+      timestamp: safeTimestamp,
+      issueDate: new Date(Number(safeTimestamp)).toISOString(),
+      ...(process.env.NODE_ENV === 'development' && {
+        debug: {
+          rawData: certificateData,
+          errorStack: error.stack
+        }
+      })
+    };
+
+    res.status(500).json(response);
+  }
+};
+
+// ======================
+// getCertificatePDF (Fixed)
+// ======================
+export const getCertificatePDF = async (req, res) => {
+  const { certificateId } = req.params;
+  const requestId = crypto.randomBytes(4).toString('hex');
+
+  try {
+    // 1. Validate certificate ID format
+    if (!/^[a-f0-9]{64}$/i.test(certificateId)) {
+      return res.status(400).json({
+        code: 'INVALID_ID',
+        message: 'Certificate ID must be 64-character hexadecimal string',
+        certificateId,
+        requestId,
+        example: '817759607228da54a922e4160f9d1b8f646e02360fc0f08372063510e87a45d6'
+      });
+    }
+
+    // 2. Fetch certificate data from blockchain
+    const certificateData = await contract.methods.getCertificate(certificateId).call();
+
+    // 3. Extract IPFS hash with multiple fallbacks
+    const ipfsHash = (
+      certificateData[4] ||                  // Array position
+      certificateData.ipfsHash ||            // Named property
+      certificateData._ipfs_hash ||          // Alternative naming
+      certificateData.ipfs                   // Common abbreviation
+    )?.trim();
+
+    // 4. Validate CID existence
+    if (!ipfsHash) {
+      return res.status(404).json({
+        code: 'MISSING_CID',
+        message: 'No IPFS hash associated with certificate',
+        certificateId,
+        requestId,
+        resolution: 'Regenerate certificate with valid PDF upload'
+      });
+    }
+
+    // 5. Strict CID validation
+    try {
+      const cid = CID.parse(ipfsHash);
+      console.log('Valid CID:', {
+        version: cid.version,
+        codec: cid.code,
+        type: cid.type
+      });
+    } catch (e) {
+      return res.status(400).json({
+        code: 'INVALID_CID',
+        message: 'Malformed IPFS Content Identifier',
+        certificateId,
+        ipfsHash,
+        requestId,
+        documentation: 'https://docs.ipfs.tech/concepts/content-addressing/'
+      });
+    }
+
+    // 6. Permanent redirect with security headers
+    const pdfUrl = `${PINATA_GATEWAY_BASE_URL}/${ipfsHash}`;
+    res
+      .set({
+        'Cache-Control': 'public, max-age=31536000, immutable', // 1 year
+        'CDN-Cache-Control': 'public, max-age=31536000',
+        'Content-Security-Policy': "default-src 'none'",
+        'X-Content-Type-Options': 'nosniff',
+        'Link': `<${pdfUrl}>; rel="canonical"` // SEO optimization
+      })
+      .redirect(301, pdfUrl); // Permanent redirect
+
+  } catch (error) {
+    // Enhanced error classification
+    const errorType = error.message.includes('revert') ? 'BLOCKCHAIN_ERROR' :
+      error.message.includes('invalid arrayify') ? 'INVALID_INPUT' :
+        'SERVER_ERROR';
+
     res.status(500).json({
-      error: 'Verification process failed',
+      code: 'PDF_RETRIEVAL_FAILED',
+      type: errorType,
+      message: 'Failed to retrieve PDF certificate',
+      certificateId,
+      requestId,
+      details: error.message,
+      ...(process.env.NODE_ENV === 'development' && {
+        stack: error.stack
+      })
+    });
+  }
+};
+// -----------------------------------------------------------------------------------------
+
+
+
+
+// Helper: Standardize blockchain response parsing
+const parseCertificateData = (data) => {
+  if (Array.isArray(data)) {
+    return {
+      uid: data[0],
+      candidateName: data[1],
+      courseName: data[2],
+      orgName: data[3],
+      ipfsHash: data[4],
+      timestamp: data[5],
+      revoked: data[6] || false
+    };
+  }
+  return {
+    uid: data.uid,
+    candidateName: data.candidateName,
+    courseName: data.courseName,
+    orgName: data.orgName,
+    ipfsHash: data.ipfsHash,
+    timestamp: data.timestamp,
+    revoked: data.revoked || false
+  };
+};
+
+// PDF Verification with Enhanced Security
+export const verifyCertificatePdf = async (req, res) => {
+  const verificationId = crypto.randomBytes(4).toString('hex');
+
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        code: 'MISSING_FILE',
+        message: 'No PDF file uploaded',
+        expectedField: 'certificate'
+      });
+    }
+
+    const processPDF = async (filePath) => {
+      try {
+        const pdfData = await extractCertificate(filePath);
+        if (!pdfData?.uid) throw new Error('Invalid PDF structure');
+        return pdfData;
+      } finally {
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      }
+    };
+
+    const pdfData = await processPDF(req.file.path);
+    const requiredFields = ['uid', 'candidateName', 'courseName', 'orgName'];
+    const missingFields = requiredFields.filter(field => !pdfData[field]);
+
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        code: 'INCOMPLETE_PDF',
+        message: 'PDF missing required fields',
+        missingFields,
+        verificationId
+      });
+    }
+
+    const certificateId = generateCertificateHash(
+      pdfData.uid,
+      pdfData.candidateName,
+      pdfData.courseName,
+      pdfData.orgName
+    );
+
+    const [exists, blockchainData] = await Promise.all([
+      contract.methods.isVerified(certificateId).call(),
+      contract.methods.getCertificate(certificateId).call()
+    ]);
+
+    if (!exists) {
+      return res.status(404).json({
+        code: 'CERTIFICATE_NOT_FOUND',
+        message: 'Certificate not registered',
+        certificateId,
+        verificationId
+      });
+    }
+
+    const parsedData = parseCertificateData(blockchainData);
+
+    // Case-insensitive comparison
+    const isConsistent = Object.entries(pdfData).every(([key, value]) =>
+      parsedData[key]?.toLowerCase() === value?.toLowerCase()
+    );
+
+    if (!isConsistent) {
+      return res.status(409).json({
+        code: 'DATA_MISMATCH',
+        message: 'PDF data doesn\'t match blockchain records',
+        certificateId,
+        pdfData: Object.fromEntries(
+          Object.entries(pdfData).map(([k, v]) => [k, v?.toLowerCase()])
+        ),
+        blockchainData: Object.fromEntries(
+          Object.entries(parsedData).map(([k, v]) => [k, typeof v === 'string' ? v?.toLowerCase() : v])
+        )
+      });
+    }
+
+    res.json({
+      status: 'VALID',
+      verificationId,
+      certificate: {
+        ...parsedData,
+        timestamp: Number(parsedData.timestamp)
+      },
+      verification: {
+        method: 'PDF_CONTENT_ANALYSIS',
+        blockchainConfirmed: true
+      }
+    });
+
+  } catch (error) {
+    console.error(`[${verificationId}] PDF Verification Error:`, error);
+
+    const statusCode = error instanceof multer.MulterError ? 400 : 500;
+    res.status(statusCode).json({
+      code: 'VERIFICATION_FAILED',
+      message: 'PDF verification process failed',
+      verificationId,
       details: error.message,
       ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
     });
   }
 };
 
-export const verifyCertificateById = async (req, res) => {
+// Enhanced Metadata Endpoint
+export const getCertificateMetadata = async (req, res) => {
+  const { certificateId } = req.params;
+  const requestId = crypto.randomBytes(4).toString('hex');
+
   try {
-    const { certificateId } = req.params;
-
-    // 1. Validate ID format
-    if (!/^[a-fA-F0-9]{64}$/.test(certificateId)) {
+    if (!/^[a-f0-9]{64}$/i.test(certificateId)) {
       return res.status(400).json({
-        error: 'Invalid ID format',
-        message: 'Certificate ID must be a 64-character hexadecimal string'
-      });
-    }
-
-    // 2. Check blockchain existence
-    console.log('Checking certificate existence for ID:', certificateId);
-    const exists = await contract.methods.isVerified(certificateId).call();
-    if (!exists) {
-      console.log('Certificate not found on blockchain');
-      return res.status(404).json({
-        error: 'Certificate not found',
-        certificateId
-      });
-    }
-
-    // 3. Get certificate data
-    const certificateData = await contract.methods.getCertificate(certificateId).call();
-    console.log('Raw certificate data from blockchain:', certificateData);
-
-    // Handle array or object response
-    let uid, candidateName, courseName, orgName, ipfsHash, timestamp;
-    if (Array.isArray(certificateData)) {
-      // web3.js 1.x array response
-      [uid, candidateName, courseName, orgName, ipfsHash, timestamp] = certificateData;
-    } else if (certificateData && typeof certificateData === 'object') {
-      // Named returns or object response
-      uid = certificateData.uid || certificateData[0];
-      candidateName = certificateData.candidateName || certificateData[1];
-      courseName = certificateData.courseName || certificateData[2];
-      orgName = certificateData.orgName || certificateData[3];
-      ipfsHash = certificateData.ipfsHash || certificateData[4];
-      timestamp = certificateData.timestamp || certificateData[5];
-    } else {
-      throw new Error('Unexpected certificate data format');
-    }
-
-    console.log('Parsed certificate data:', { uid, candidateName, courseName, orgName, ipfsHash, timestamp });
-
-    // 4. Validate IPFS hash
-    if (!ipfsHash || !ipfsHash.startsWith('Qm')) {
-      console.error('Invalid IPFS hash:', ipfsHash);
-      return res.status(500).json({
-        error: 'Invalid IPFS data',
-        details: 'Corrupted certificate storage'
-      });
-    }
-
-    // 5. Retrieve PDF from IPFS
-    const ipfsUrl = `${PINATA_GATEWAY_BASE_URL}/${ipfsHash}`;
-    console.log('Fetching IPFS content from:', ipfsUrl);
-    const response = await axios.get(ipfsUrl, { responseType: 'arraybuffer' });
-
-    // 6. Send response
-    res.set({
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `inline; filename="${certificateId}.pdf"`,
-      'X-Certificate-Metadata': JSON.stringify({
+        code: 'INVALID_ID',
+        message: 'Invalid certificate ID format',
         certificateId,
-        uid,
-        candidateName,
-        courseName,
-        orgName,
-        timestamp
-      })
-    }).send(response.data);
+        requestId
+      });
+    }
+
+    const [exists, blockchainData] = await Promise.all([
+      contract.methods.isVerified(certificateId).call(),
+      contract.methods.getCertificate(certificateId).call()
+    ]);
+
+    if (!exists) {
+      return res.status(404).json({
+        code: 'CERTIFICATE_NOT_FOUND',
+        message: 'Certificate does not exist or is revoked',
+        certificateId,
+        requestId
+      });
+    }
+
+    const parsedData = parseCertificateData(blockchainData);
+
+    res.json({
+      status: 'FOUND',
+      certificateId,
+      ...parsedData,
+      timestamp: Number(parsedData.timestamp),
+      verificationStatus: 'VALID',
+      links: {
+        pdf: `${PINATA_GATEWAY_BASE_URL}/${parsedData.ipfsHash}`,
+        blockchain: `${BLOCK_EXPLORER_URL}/tx/${certificateId}`
+      }
+    });
 
   } catch (error) {
-    console.error('Verification by ID Error:', error);
-    const statusCode = error.response?.status === 504 ? 502 : 500;
-    const errorMessage = error.message.includes('IPFS')
-      ? 'IPFS gateway error'
-      : 'Verification failed';
+    res.status(500).json({
+      code: 'METADATA_ERROR',
+      message: 'Failed to fetch certificate metadata',
+      certificateId,
+      requestId,
+      details: error.message
+    });
+  }
+};
 
+// Secure External Certificate Upload
+export const uploadExternalCertificate = async (req, res) => {
+  const uploadId = crypto.randomBytes(4).toString('hex');
+
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        code: 'MISSING_FILE',
+        message: 'No PDF file uploaded',
+        uploadId
+      });
+    }
+
+    const processFile = async (path) => {
+      const pdfBuffer = fs.readFileSync(path);
+      return {
+        pdfHash: crypto.createHash('sha256').update(pdfBuffer).digest('hex'),
+        ipfsHash: await pinata.uploadToPinata(path)
+      };
+    };
+
+    const { pdfHash, ipfsHash } = await processFile(req.file.path);
+    fs.unlinkSync(req.file.path);
+
+    // Validate CID before blockchain storage
+    CID.parse(ipfsHash.trim());
+
+    const accounts = await web3.eth.getAccounts();
+    const tx = await contract.methods
+      .storeExternalCertificate(pdfHash, ipfsHash)
+      .send({ from: accounts[0], gas: 1000000 });
+
+    await new Certificate({
+      cid: ipfsHash,
+      pdfHash,
+      orgName: req.body.orgName,
+      candidateName: req.body.candidateName,
+      txHash: tx.transactionHash
+    }).save();
+
+    res.status(201).json({
+      status: 'UPLOADED',
+      cid: ipfsHash,
+      verificationUrl: `/api/certificates/verify/${ipfsHash}`,
+      ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/${ipfsHash}`,
+      transaction: {
+        hash: tx.transactionHash,
+        block: tx.blockNumber
+      }
+    });
+
+  } catch (error) {
+    console.error(`[${uploadId}] Upload Error:`, error);
+    res.status(500).json({
+      code: 'UPLOAD_FAILED',
+      message: 'Failed to store external certificate',
+      uploadId,
+      details: error.message
+    });
+  }
+};
+
+// CID Search with Validation
+export const searchByCID = async (req, res) => {
+  const { cid } = req.params;
+  const requestId = crypto.randomBytes(4).toString('hex');
+
+  try {
+    CID.parse(cid); // Validate CID format first
+
+    const exists = await contract.methods.cidExists(cid).call();
+    if (!exists) {
+      return res.status(404).json({
+        code: 'CID_NOT_FOUND',
+        message: 'Certificate with this CID does not exist',
+        cid,
+        requestId
+      });
+    }
+
+    res.redirect(301, `${PINATA_GATEWAY_BASE_URL}/${cid}`);
+
+  } catch (error) {
+    const statusCode = error.message.includes('invalid cid') ? 400 : 500;
     res.status(statusCode).json({
-      error: errorMessage,
-      certificateId: req.params.certificateId,
-      details: error.message,
-      ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+      code: statusCode === 400 ? 'INVALID_CID' : 'SEARCH_ERROR',
+      message: 'CID search failed',
+      cid,
+      requestId,
+      details: error.message
+    });
+  }
+};
+
+// Statistics Endpoint with Cache
+const statsCache = new Map();
+export const getCertificateStats = async (req, res) => {
+  try {
+    if (statsCache.has('latest')) {
+      const { timestamp, data } = statsCache.get('latest');
+      if (Date.now() - timestamp < 60000) { // 1 minute cache
+        return res.json(data);
+      }
+    }
+
+    const stats = await Certificate.aggregate([
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          internal: { $sum: { $cond: [{ $certificateId: { $exists: true } }, 1, 0] } },
+          external: { $sum: { $cond: [{ $cid: { $exists: true } }, 1, 0] } },
+          organizations: { $addToSet: "$orgName" }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          total: 1,
+          internal: 1,
+          external: 1,
+          organizations: { $size: "$organizations" }
+        }
+      }
+    ]);
+
+    const result = stats[0] || { total: 0, internal: 0, external: 0, organizations: 0 };
+    statsCache.set('latest', {
+      timestamp: Date.now(),
+      data: result
+    });
+
+    res.json(result);
+
+  } catch (error) {
+    res.status(500).json({
+      code: 'STATS_ERROR',
+      message: 'Failed to fetch statistics',
+      details: error.message
+    });
+  }
+};
+
+// Organization Certificates with Pagination
+export const getOrgCertificates = async (req, res) => {
+  const { orgName } = req.params;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+
+  try {
+    const query = { orgName: new RegExp(orgName, 'i') };
+    const [certificates, count] = await Promise.all([
+      Certificate.find(query)
+        .sort('-createdAt')
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      Certificate.countDocuments(query)
+    ]);
+
+    res.json({
+      total: count,
+      page,
+      totalPages: Math.ceil(count / limit),
+      certificates: certificates.map(cert => ({
+        id: cert.certificateId || cert.cid,
+        type: cert.certificateId ? 'internal' : 'external',
+        candidate: cert.candidateName,
+        issueDate: cert.createdAt,
+        ...(cert.certificateId && {
+          verifyUrl: `/api/certificates/${cert.certificateId}/verify`
+        })
+      }))
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      code: 'ORG_CERTS_ERROR',
+      message: 'Failed to fetch organization certificates',
+      orgName,
+      details: error.message
     });
   }
 };

@@ -9,14 +9,15 @@ dotenv.config();
 const providerURL = process.env.PROVIDER_URL || 'http://localhost:8545';
 const web3 = new Web3(new Web3.providers.HttpProvider(providerURL));
 
-// Verify contract ABI structure
+// verify contract ABI structure
 const verifyABI = (abi) => {
   const getCertificateMethod = abi.find(m =>
     m.name === 'getCertificate' && m.type === 'function'
   );
 
-  if (!getCertificateMethod?.outputs?.every(o => o.type === 'string')) {
-    throw new Error('Invalid ABI structure - rebuild contracts');
+  // WRONG: Outputs include uint256 and bool
+  if (!getCertificateMethod?.outputs?.some(o => o.type === 'string')) {
+    throw new Error('Invalid ABI structure');
   }
 };
 

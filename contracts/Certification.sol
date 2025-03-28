@@ -4,16 +4,17 @@ pragma solidity ^0.8.13;
 contract Certification {
     struct Certificate {
         string uid;
-        string candidateName;  // Consistent naming
+        string candidateName;
         string courseName;
         string orgName;
         string ipfsHash;
         uint256 timestamp;
+        bool revoked; // Added revoked status to struct
     }
 
-    mapping(string => Certificate) public certificates; // certificateId => Certificate
-
-    // Enhanced event with more data for debugging
+    mapping(string => Certificate) public certificates;
+    address public owner;
+    
     event CertificateGenerated(
         string indexed certificateId,
         string uid,
@@ -21,16 +22,15 @@ contract Certification {
         string ipfsHash,
         uint256 timestamp
     );
-
-    // Optional: Add access control
-    address public owner;
+    
+    event CertificateRevoked(string indexed certificateId);
 
     constructor() {
         owner = msg.sender;
     }
 
     modifier onlyOwner() {
-        require(msg.sender == owner, "Only owner can call this function");
+        require(msg.sender == owner, "Only owner allowed");
         _;
     }
 
@@ -41,22 +41,23 @@ contract Certification {
         string memory courseName,
         string memory orgName,
         string memory ipfsHash
-    ) public onlyOwner {  // Added onlyOwner for security
+    ) public onlyOwner {
         require(
             bytes(certificates[certificateId].ipfsHash).length == 0,
-            "Certificate ID already exists"
+            "Certificate exists"
         );
-        require(bytes(certificateId).length > 0, "Certificate ID cannot be empty");
-        require(bytes(ipfsHash).length > 0, "IPFS hash cannot be empty");
+        require(bytes(certificateId).length > 0, "Empty ID");
+        require(bytes(ipfsHash).length > 0, "Empty IPFS hash");
 
-        certificates[certificateId] = Certificate(
-            uid,
-            candidateName,
-            courseName,
-            orgName,
-            ipfsHash,
-            block.timestamp
-        );
+        certificates[certificateId] = Certificate({
+            uid: uid,
+            candidateName: candidateName,
+            courseName: courseName,
+            orgName: orgName,
+            ipfsHash: ipfsHash,
+            timestamp: block.timestamp,
+            revoked: false // Initialize revoked status
+        });
 
         emit CertificateGenerated(certificateId, uid, candidateName, ipfsHash, block.timestamp);
     }
@@ -70,24 +71,39 @@ contract Certification {
             string memory courseName,
             string memory orgName,
             string memory ipfsHash,
-            uint256 timestamp
+            uint256 timestamp,
+            bool revoked
         )
     {
         require(
             bytes(certificates[certificateId].ipfsHash).length != 0,
-            "Certificate does not exist"
+            "Certificate not found"
         );
         Certificate memory c = certificates[certificateId];
-        return (c.uid, c.candidateName, c.courseName, c.orgName, c.ipfsHash, c.timestamp);
+        return (
+            c.uid,
+            c.candidateName,
+            c.courseName,
+            c.orgName,
+            c.ipfsHash,
+            c.timestamp,
+            c.revoked
+        );
     }
 
     function isVerified(string memory certificateId) public view returns (bool) {
-        return bytes(certificates[certificateId].ipfsHash).length != 0;
+        Certificate memory c = certificates[certificateId];
+        return bytes(c.ipfsHash).length != 0 && !c.revoked;
     }
 
-    // Optional: Allow owner to update contract if needed
-    function setOwner(address newOwner) public onlyOwner {
-        require(newOwner != address(0), "Invalid address");
-        owner = newOwner;
+    function revokeCertificate(string memory certificateId) public onlyOwner {
+        require(
+            bytes(certificates[certificateId].ipfsHash).length != 0,
+            "Certificate not found"
+        );
+        require(!certificates[certificateId].revoked, "Already revoked");
+        
+        certificates[certificateId].revoked = true;
+        emit CertificateRevoked(certificateId);
     }
 }

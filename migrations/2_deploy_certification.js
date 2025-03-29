@@ -9,7 +9,7 @@ module.exports = async function (deployer) {
     const instance = await Certification.deployed();
 
     // Ensure build directory exists
-    const buildDir = path.join(__dirname, '../build/contract');
+    const buildDir = path.join(__dirname, '../build/contracts');
     if (!fs.existsSync(buildDir)) {
       fs.mkdirSync(buildDir, { recursive: true });
     }

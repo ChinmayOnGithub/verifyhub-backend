@@ -1,6 +1,7 @@
 // src/models/User.js
 import mongoose from 'mongoose';
 import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken'; // Added missing JWT import
 
 const UserSchema = new mongoose.Schema({
   name: {
@@ -14,13 +15,12 @@ const UserSchema = new mongoose.Schema({
     required: [true, 'Please provide an email'],
     unique: true,
     lowercase: true,
-    match: [/\S+@\S+\.\S+/, 'Please use a valid email address']
-    // match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please fill a valid email address']
+    // match: [/\S+@\S+\.\S+/, 'Please use a valid email address'] // Commented out as requested
   },
   password: {
     type: String,
     required: [true, 'Please provide a password'],
-    minlength: [6, 'Password must be at least 6 characters'],
+    // minlength: [6, 'Password must be at least 6 characters'], // Commented out as requested
     select: false
   },
   role: {
@@ -57,7 +57,6 @@ const UserSchema = new mongoose.Schema({
 });
 
 // Indexes
-UserSchema.index({ email: 1 });
 UserSchema.index({ role: 1 });
 
 // Pre-save hooks
@@ -87,7 +86,6 @@ UserSchema.methods = {
       ipAddress: req.ip,
       userAgent: req.headers['user-agent']
     });
-    // Keep only last 10 logins
     if (this.loginHistory.length > 10) this.loginHistory.shift();
   },
 

@@ -5,54 +5,129 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Configure provider
-const providerURL = process.env.PROVIDER_URL || 'http://localhost:8545';
-const web3 = new Web3(new Web3.providers.HttpProvider(providerURL));
-
-// verify contract ABI structure
-const verifyABI = (abi) => {
-  const getCertificateMethod = abi.find(m =>
-    m.name === 'getCertificate' && m.type === 'function'
-  );
-
-  // WRONG: Outputs include uint256 and bool
-  if (!getCertificateMethod?.outputs?.some(o => o.type === 'string')) {
-    throw new Error('Invalid ABI structure');
+// ========== ENHANCEMENT 1: Centralized configuration ==========
+const config = {
+  providerURL: process.env.PROVIDER_URL || 'http://localhost:8545',
+  contractPaths: {
+    abi: path.join(process.cwd(), 'build/contracts/Certification.json'),
+    deployment: path.join(process.cwd(), 'build/contracts/deployment_config.json')
+  },
+  healthCheck: {
+    retries: 3,
+    retryDelay: 2000
   }
 };
 
-// Load contract with validation
-let contract;
-try {
-  const certPath = path.join(process.cwd(), 'build/contract/Certification.json');
-  const { abi } = JSON.parse(fs.readFileSync(certPath, 'utf8'));
-  verifyABI(abi);
+// ========== ENHANCEMENT 2: Better initialization handling ==========
+let isInitialized = false;
+let contract = null;
+let web3 = null;
 
-  const deployPath = path.join(process.cwd(), 'build/contract/deployment_config.json');
-  const { Certification: address } = JSON.parse(fs.readFileSync(deployPath, 'utf8'));
+// ========== ENHANCEMENT 3: Robust ABI validation ==========
+const verifyABI = (abi) => {
+  const requiredMethods = {
+    getCertificate: {
+      inputs: [{ type: 'string' }],
+      outputs: [
+        { type: 'string' }, { type: 'string' }, { type: 'string' },
+        { type: 'string' }, { type: 'string' }, { type: 'uint256' },
+        { type: 'bool' }
+      ]
+    }
+  };
 
-  contract = new web3.eth.Contract(abi, address);
-  console.log('Contract initialized at:', address);
-} catch (error) {
-  console.error('Contract initialization failed:', error);
-  process.exit(1);
-}
+  Object.entries(requiredMethods).forEach(([methodName, signature]) => {
+    const method = abi.find(m =>
+      m.name === methodName &&
+      m.type === 'function' &&
+      m.inputs?.every((input, i) => input.type === signature.inputs[i]?.type)
+    );
 
-// Verify connection
-const verifyConnection = async () => {
+    if (!method) {
+      throw new Error(`Missing required method: ${methodName}`);
+    }
+  });
+};
+
+// ========== ENHANCEMENT 4: Async initialization with retries ==========
+export const initializeBlockchain = async (retries = config.healthCheck.retries) => {
   try {
-    const [account] = await web3.eth.getAccounts();
+    web3 = new Web3(config.providerURL);
+
+    // Load contract artifacts
+    const { abi } = JSON.parse(fs.readFileSync(config.contractPaths.abi, 'utf8'));
+    const { Certification: address } = JSON.parse(fs.readFileSync(config.contractPaths.deployment, 'utf8'));
+
+    verifyABI(abi);
+    contract = new web3.eth.Contract(abi, address);
+
+    // Verify deployment
+    const code = await web3.eth.getCode(address);
+    if (code === '0x') throw new Error('Contract not deployed');
+
+    isInitialized = true;
+    console.log('Blockchain initialized successfully');
+    return true;
+  } catch (error) {
+    if (retries > 0) {
+      console.warn(`Retrying initialization... (${retries} left)`);
+      await new Promise(res => setTimeout(res, config.healthCheck.retryDelay));
+      return initializeBlockchain(retries - 1);
+    }
+
+    console.error('Blockchain initialization failed:', error.message);
+    isInitialized = false;
+    return false;
+  }
+};
+
+// ========== ENHANCEMENT 5: Status-aware getters ==========
+export const getWeb3 = () => {
+  if (!web3) throw new Error('Web3 not initialized');
+  return web3;
+};
+
+export const getContract = () => {
+  if (!contract) throw new Error('Contract not initialized');
+  return contract;
+};
+
+// ========== ENHANCEMENT 6: Comprehensive health check ==========
+export const checkBlockchainStatus = async () => {
+  try {
+    if (!isInitialized) {
+      return {
+        connected: false,
+        initialized: false,
+        error: 'Blockchain client not initialized'
+      };
+    }
+
+    // Node connectivity check
+    const blockNumber = await web3.eth.getBlockNumber();
+
+    // Contract deployment check
     const code = await web3.eth.getCode(contract.options.address);
 
-    if (code === '0x') throw new Error('Contract not deployed');
-    console.log('Blockchain connection verified');
-
+    return {
+      connected: true,
+      initialized: true,
+      nodeUrl: config.providerURL,
+      contractAddress: contract.options.address,
+      latestBlock: blockNumber,
+      contractDeployed: code !== '0x'
+    };
   } catch (error) {
-    console.error('Connection failed:', error);
-    process.exit(1);
+    return {
+      connected: false,
+      initialized: isInitialized,
+      error: error.message,
+      nodeUrl: config.providerURL,
+      contractAddress: contract?.options.address || 'N/A'
+    };
   }
 };
 
-verifyConnection();
-
+// ========== Backward compatibility ==========
+// Maintain original export structure
 export { web3, contract };

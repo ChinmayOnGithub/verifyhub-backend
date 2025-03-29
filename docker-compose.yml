@@ -1,4 +1,4 @@
-version: "3.8"
+# version: "3.8"
 
 services:
   ganache:
@@ -27,7 +27,7 @@ services:
     depends_on:
       - ganache
     volumes:
-      - ./build/contract:/app/build/contract
+      - ./build/contracts:/app/build/contracts
       - blockchain_data:/app/db
     networks:
       - verifyhub-net

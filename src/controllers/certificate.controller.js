@@ -29,7 +29,7 @@ import multer from 'multer'; // Add multer import
 import { computePDFHash, getStoredHashFromBlockchain } from '../utils/pdfHashUtils.js';
 
 BigInt.prototype.toJSON = function () { return this.toString(); };
-const BLOCK_EXPLORER_URL = 'something'
+const BLOCK_EXPLORER_URL = 'http://localhost:8545'
 
 // Helper function for standardized hashing
 const generateCertificateHash = (uid, candidateName, courseName, orgName) => {

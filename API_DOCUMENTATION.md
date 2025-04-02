@@ -28,20 +28,24 @@ Public endpoints are rate-limited to 100 requests per IP address within a 15-min
 POST /generate
 Authorization: Bearer <token>
 Content-Type: application/json
-
-{
-  "studentName": "string",
-  "courseName": "string",
-  "issueDate": "string (ISO date)",
-  "organizationName": "string",
-  "certificateId": "string",
-  "metadata": {
-    // Optional additional metadata
-  }
-}
 ```
 
-**Response**:
+**Input Requirements:**
+
+- Required Fields:
+  - `studentName` (string): Full name of the student
+  - `courseName` (string): Name of the course completed
+  - `issueDate` (string): ISO date format (YYYY-MM-DD)
+  - `organizationName` (string): Name of the issuing organization
+  - `certificateId` (string): Unique identifier for the certificate
+- Optional Fields:
+  - `metadata` (object): Additional certificate information
+    - `grade` (string): Student's grade/score
+    - `duration` (string): Course duration
+    - `instructor` (string): Course instructor name
+    - `customFields` (object): Any additional custom fields
+
+**Response Format:**
 
 ```json
 {
@@ -50,7 +54,9 @@ Content-Type: application/json
     "certificateId": "string",
     "ipfsHash": "string",
     "sha256Hash": "string",
-    "cidHash": "string"
+    "cidHash": "string",
+    "pdfUrl": "string",
+    "createdAt": "ISO date string"
   }
 }
 ```
@@ -61,11 +67,24 @@ Content-Type: application/json
 POST /upload/external
 Authorization: Bearer <token>
 Content-Type: multipart/form-data
-
-certificate: <PDF file>
 ```
 
-**Response**:
+**Input Requirements:**
+
+- Required Fields:
+  - `certificate` (file): PDF file of the certificate
+    - Max size: 10MB
+    - Format: PDF only
+    - Field name must be "certificate"
+- Optional Fields:
+  - `metadata` (string): JSON string containing additional metadata
+    - `studentName` (string)
+    - `courseName` (string)
+    - `issueDate` (string)
+    - `organizationName` (string)
+    - `customFields` (object)
+
+**Response Format:**
 
 ```json
 {
@@ -74,7 +93,12 @@ certificate: <PDF file>
     "certificateId": "string",
     "ipfsHash": "string",
     "sha256Hash": "string",
-    "cidHash": "string"
+    "cidHash": "string",
+    "pdfUrl": "string",
+    "createdAt": "ISO date string",
+    "extractedMetadata": {
+      // Automatically extracted metadata from PDF
+    }
   }
 }
 ```
@@ -87,7 +111,12 @@ certificate: <PDF file>
 GET /{certificateId}/verify
 ```
 
-**Response**:
+**Input Requirements:**
+
+- URL Parameters:
+  - `certificateId` (string): The unique identifier of the certificate to verify
+
+**Response Format:**
 
 ```json
 {
@@ -97,7 +126,14 @@ GET /{certificateId}/verify
     "verificationDetails": {
       "databaseMatch": boolean,
       "blockchainMatch": boolean,
-      "hashMatch": boolean
+      "hashMatch": boolean,
+      "verificationTimestamp": "ISO date string"
+    },
+    "certificateInfo": {
+      "studentName": "string",
+      "courseName": "string",
+      "issueDate": "string",
+      "organizationName": "string"
     }
   }
 }
@@ -108,11 +144,17 @@ GET /{certificateId}/verify
 ```http
 POST /verify/pdf
 Content-Type: multipart/form-data
-
-certificate: <PDF file>
 ```
 
-**Response**:
+**Input Requirements:**
+
+- Required Fields:
+  - `certificate` (file): PDF file to verify
+    - Max size: 10MB
+    - Format: PDF only
+    - Field name must be "certificate"
+
+**Response Format:**
 
 ```json
 {
@@ -122,7 +164,14 @@ certificate: <PDF file>
     "verificationDetails": {
       "databaseMatch": boolean,
       "blockchainMatch": boolean,
-      "hashMatch": boolean
+      "hashMatch": boolean,
+      "verificationTimestamp": "ISO date string"
+    },
+    "certificateInfo": {
+      "studentName": "string",
+      "courseName": "string",
+      "issueDate": "string",
+      "organizationName": "string"
     }
   }
 }
@@ -133,11 +182,17 @@ certificate: <PDF file>
 ```http
 POST /debug/pdf
 Content-Type: multipart/form-data
-
-certificate: <PDF file>
 ```
 
-**Response**:
+**Input Requirements:**
+
+- Required Fields:
+  - `certificate` (file): PDF file to debug
+    - Max size: 10MB
+    - Format: PDF only
+    - Field name must be "certificate"
+
+**Response Format:**
 
 ```json
 {
@@ -149,8 +204,18 @@ certificate: <PDF file>
         "cidHash": "string"
       },
       "verificationSteps": [
-        // Detailed verification steps
-      ]
+        {
+          "step": "string",
+          "status": "success|failure",
+          "details": "string"
+        }
+      ],
+      "extractedMetadata": {
+        // All metadata extracted from PDF
+      },
+      "comparisonResults": {
+        // Detailed comparison results
+      }
     }
   }
 }
@@ -164,7 +229,15 @@ certificate: <PDF file>
 GET /{certificateId}/pdf
 ```
 
-**Response**: PDF file
+**Input Requirements:**
+
+- URL Parameters:
+  - `certificateId` (string): The unique identifier of the certificate
+
+**Response Format:**
+
+- Content-Type: application/pdf
+- Binary PDF file data
 
 #### 2. Get Certificate Metadata
 
@@ -172,7 +245,12 @@ GET /{certificateId}/pdf
 GET /{certificateId}/metadata
 ```
 
-**Response**:
+**Input Requirements:**
+
+- URL Parameters:
+  - `certificateId` (string): The unique identifier of the certificate
+
+**Response Format:**
 
 ```json
 {
@@ -184,8 +262,16 @@ GET /{certificateId}/metadata
     "organizationName": "string",
     "certificateId": "string",
     "metadata": {
-      // Additional metadata
-    }
+      "grade": "string",
+      "duration": "string",
+      "instructor": "string",
+      "customFields": {
+        // Additional custom fields
+      }
+    },
+    "verificationStatus": "string",
+    "createdAt": "ISO date string",
+    "updatedAt": "ISO date string"
   }
 }
 ```
@@ -196,7 +282,12 @@ GET /{certificateId}/metadata
 GET /search/cid/{cid}
 ```
 
-**Response**:
+**Input Requirements:**
+
+- URL Parameters:
+  - `cid` (string): The Content Identifier (CID) hash to search for
+
+**Response Format:**
 
 ```json
 {
@@ -204,8 +295,13 @@ GET /search/cid/{cid}
   "data": {
     "certificateId": "string",
     "metadata": {
-      // Certificate metadata
-    }
+      "studentName": "string",
+      "courseName": "string",
+      "issueDate": "string",
+      "organizationName": "string"
+    },
+    "verificationStatus": "string",
+    "createdAt": "ISO date string"
   }
 }
 ```
@@ -219,7 +315,12 @@ GET /stats
 Authorization: Bearer <token>
 ```
 
-**Response**:
+**Input Requirements:**
+
+- No additional input required
+- Valid JWT token in Authorization header
+
+**Response Format:**
 
 ```json
 {
@@ -229,8 +330,17 @@ Authorization: Bearer <token>
     "verifiedCertificates": number,
     "pendingVerification": number,
     "recentActivity": [
-      // Recent certificate activities
-    ]
+      {
+        "certificateId": "string",
+        "action": "string",
+        "timestamp": "ISO date string",
+        "details": "string"
+      }
+    ],
+    "verificationStats": {
+      "successRate": number,
+      "averageVerificationTime": number
+    }
   }
 }
 ```
@@ -242,20 +352,34 @@ GET /organization/{orgName}
 Authorization: Bearer <token>
 ```
 
-**Response**:
+**Input Requirements:**
+
+- URL Parameters:
+  - `orgName` (string): Name of the organization
+- Query Parameters (optional):
+  - `page` (number): Page number for pagination (default: 1)
+  - `limit` (number): Number of items per page (default: 10)
+  - `sortBy` (string): Field to sort by (default: "createdAt")
+  - `sortOrder` (string): "asc" or "desc" (default: "desc")
+
+**Response Format:**
 
 ```json
 {
   "success": true,
   "data": {
     "organizationName": "string",
+    "totalCertificates": number,
+    "currentPage": number,
+    "totalPages": number,
     "certificates": [
       {
         "certificateId": "string",
         "studentName": "string",
         "courseName": "string",
         "issueDate": "string",
-        "verificationStatus": "string"
+        "verificationStatus": "string",
+        "createdAt": "ISO date string"
       }
     ]
   }
@@ -273,7 +397,10 @@ All endpoints may return the following error responses:
   "success": false,
   "error": {
     "code": "BAD_REQUEST",
-    "message": "Invalid request parameters"
+    "message": "Invalid request parameters",
+    "details": {
+      // Specific validation errors
+    }
   }
 }
 ```
@@ -309,7 +436,8 @@ All endpoints may return the following error responses:
   "success": false,
   "error": {
     "code": "RATE_LIMIT_EXCEEDED",
-    "message": "Too many requests, please try again later"
+    "message": "Too many requests, please try again later",
+    "retryAfter": number // seconds until next window
   }
 }
 ```
@@ -335,3 +463,8 @@ All endpoints may return the following error responses:
 5. PDF files should be properly validated before upload
 6. All dates should be in ISO format
 7. Responses include a `success` boolean flag and either `data` or `error` object
+8. File size limits:
+   - Maximum PDF size: 10MB
+   - Supported formats: PDF only
+9. Pagination is available for list endpoints
+10. All timestamps are in ISO 8601 format

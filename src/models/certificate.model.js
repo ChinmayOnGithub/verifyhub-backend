@@ -8,9 +8,56 @@ const CertificateSchema = new mongoose.Schema(
     candidateName: { type: String, required: true },
     courseName: { type: String, required: true },
     orgName: { type: String, required: true },
-    ipfsHash: { type: String, required: true }
+    ipfsHash: { type: String, required: true },
+    sha256Hash: { type: String },
+    cidHash: { type: String },
+    blockchainTx: { type: String },
+    status: {
+      type: String,
+      enum: ['PENDING', 'CONFIRMED', 'FAILED'],
+      default: 'PENDING'
+    },
+    source: {
+      type: String,
+      enum: ['internal', 'external'],
+      default: 'internal'
+    },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now }
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    indexes: [
+      { certificateId: 1 },
+      { ipfsHash: 1 },
+      { sha256Hash: 1 },
+      { cidHash: 1 },
+      { blockchainTx: 1 },
+      { candidateName: 1 },
+      { orgName: 1 }
+    ]
+  }
 );
 
-export default mongoose.model('Certificate', CertificateSchema);
+// Add a method to check if a certificate exists by hash
+CertificateSchema.statics.findByHash = function (ipfsHash) {
+  return this.findOne({ ipfsHash });
+};
+
+// Add a method to check if a certificate exists by SHA-256 hash
+CertificateSchema.statics.findBySha256Hash = function (sha256Hash) {
+  return this.findOne({ sha256Hash });
+};
+
+// Add a method to check if a certificate exists by CID hash
+CertificateSchema.statics.findByCidHash = function (cidHash) {
+  return this.findOne({ cidHash });
+};
+
+// Add a method to check if a certificate exists by transaction hash
+CertificateSchema.statics.findByTxHash = function (txHash) {
+  return this.findOne({ blockchainTx: txHash });
+};
+
+export const Certificate = mongoose.model('Certificate', CertificateSchema);
+export default Certificate;

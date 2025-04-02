@@ -18,8 +18,8 @@ export const uploadToPinata = async (filePath) => {
     const apiKey = process.env.PINATA_API_KEY;
     const apiSecret = process.env.PINATA_API_SECRET;
 
-    console.log('Pinata API Key:', apiKey); // Should match c60213b1e6f1a734c90b
-    console.log('Pinata API Secret:', apiSecret ? '[REDACTED]' : 'MISSING'); // Check if loaded
+    // console.log('Pinata API Key:', apiKey); // Should match c60213b1e6f1a734c90b
+    // console.log('Pinata API Secret:', apiSecret ? '[REDACTED]' : 'MISSING'); // Check if loaded
 
     if (!apiKey || !apiSecret) {
       throw new Error('Pinata API credentials not set in environment variables');
@@ -100,5 +100,51 @@ export const verifyPinataAuth = async () => {
   } catch (error) {
     console.error('Pinata Auth Failed:', error.response?.data || error.message);
     return false;
+  }
+};
+
+export const uploadBufferToPinata = async (buffer, filename) => {
+  try {
+    const apiKey = process.env.PINATA_API_KEY;
+    const apiSecret = process.env.PINATA_API_SECRET;
+
+    if (!apiKey || !apiSecret) {
+      throw new Error('Pinata API credentials not set in environment variables');
+    }
+
+    if (!buffer) {
+      throw new Error('No buffer provided for upload');
+    }
+
+    console.log('Uploading buffer with filename:', filename, 'Size:', buffer.length);
+
+    const data = new FormData();
+    data.append('file', buffer, { filename: filename });
+    console.log('FormData headers:', data.getHeaders());
+
+    const response = await axios.post(PINATA_API_URL, data, {
+      maxContentLength: Infinity,
+      headers: {
+        ...data.getHeaders(),
+        pinata_api_key: apiKey,
+        pinata_secret_api_key: apiSecret
+      }
+    }).catch(err => {
+      console.error('Axios error:', err.response?.data || err.message);
+      throw err;
+    });
+
+    console.log('Pinata response:', response.data);
+
+    if (response.data && response.data.IpfsHash) {
+      console.log(`File uploaded to Pinata. IPFS Hash: ${response.data.IpfsHash}`);
+      return response.data.IpfsHash;
+    } else {
+      console.error('Unexpected Pinata response:', response.data);
+      throw new Error('Failed to get IPFS hash from Pinata');
+    }
+  } catch (error) {
+    console.error('Error in uploadBufferToPinata:', error.message);
+    throw error;
   }
 };

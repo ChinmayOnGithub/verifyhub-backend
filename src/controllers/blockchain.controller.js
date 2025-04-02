@@ -1,4 +1,15 @@
 // src/controllers/blockchain.controller.js
+
+/* 
+blockchain.controller.js
+  getBlockchainCertificate
+  verifyCertificateById
+  generateBlockchainRecord
+  getBlockchainTransaction
+  checkRevocationStatus
+
+*/
+
 import { getContract } from '../utils/blockchain.js';
 
 export const getBlockchainCertificate = async (req, res) => {

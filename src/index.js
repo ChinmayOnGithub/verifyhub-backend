@@ -47,9 +47,9 @@ const startServer = async () => {
 
     // 3. Start server
     app.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`📡 Blockchain node: ${process.env.PROVIDER_URL}`);
       console.log(`🗄️  Database host: ${process.env.MONGODB_URI?.split('@').pop() || 'localhost'}`);
+      console.log(`📡 Blockchain node: ${process.env.PROVIDER_URL}`);
+      console.log(`🚀 Server running on port ${PORT}`);
     });
 
   } catch (error) {

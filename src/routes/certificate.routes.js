@@ -16,6 +16,12 @@ import {
   debugPdfVerification
 } from '../controllers/certificate.controller.js';
 
+// Import from the new verification controller
+import {
+  verifyCertificateByShortCode,
+  verifyInstitutionalSignature
+} from '../controllers/verification.controller.js';
+
 const router = express.Router();
 
 // Rate limiting for public endpoints
@@ -36,6 +42,12 @@ router.post('/upload/external', authMiddleware, pdfUploadMemory.single('certific
 router.get('/:certificateId/verify', apiLimiter, verifyCertificateById);
 router.post('/verify/pdf', apiLimiter, pdfUploadMemory.single('certificate'), verifyCertificatePdf);
 router.post('/debug/pdf', apiLimiter, pdfUploadMemory.single('certificate'), debugPdfVerification);
+
+// New Short Code Verification Route (Public) - Now using the new controller
+router.get('/code/:shortCode', apiLimiter, verifyCertificateByShortCode);
+
+// New Institutional Signature Verification Route (Public) - Now using the new controller
+router.get('/:certificateId/signature/verify', apiLimiter, verifyInstitutionalSignature);
 
 // Certificate Retrieval Routes (Public)
 router.get('/:certificateId/pdf', apiLimiter, getCertificatePDF);

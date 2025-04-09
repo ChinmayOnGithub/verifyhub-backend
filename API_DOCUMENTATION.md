@@ -139,7 +139,56 @@ GET /{certificateId}/verify
 }
 ```
 
-#### 2. Verify Certificate PDF
+#### 2. Verify by Short Code
+
+```http
+GET /code/{shortCode}
+```
+
+**Input Requirements:**
+
+- URL Parameters:
+  - `shortCode` (string): 4-character alphanumeric verification code (uppercase)
+
+**Response Format:**
+
+```json
+{
+  "status": "VALID|INVALID",
+  "verificationId": "string",
+  "certificate": {
+    "certificateId": "string",
+    "shortCode": "string",
+    "studentName": "string",
+    "courseName": "string",
+    "organizationName": "string",
+    "verificationUrl": "string"
+  }
+}
+```
+
+#### 3. Verify Institutional Signature
+
+```http
+GET /{certificateId}/signature/verify
+```
+
+**Input Requirements:**
+
+- URL Parameters:
+  - `certificateId` (string): The unique identifier of the certificate
+
+**Response Format:**
+
+```json
+{
+  "status": "SIGNATURE_VALID|INVALID",
+  "institution": "string",
+  "signatureTimestamp": "ISO date string"
+}
+```
+
+#### 4. Verify Certificate PDF
 
 ```http
 POST /verify/pdf
@@ -177,7 +226,7 @@ Content-Type: multipart/form-data
 }
 ```
 
-#### 3. Debug PDF Verification
+#### 5. Debug PDF Verification
 
 ```http
 POST /debug/pdf
@@ -386,6 +435,35 @@ Authorization: Bearer <token>
 }
 ```
 
+### New Verification Endpoints
+
+#### Verify by Short Code
+
+```http
+GET /api/certificates/code/{shortCode}
+```
+
+- **shortCode**: 4-character alphanumeric code (e.g. A1B2)
+- Returns certificate details if valid code
+
+#### Verify Institutional Signature
+
+```http
+GET /api/certificates/{certificateId}/signature/verify
+```
+
+- **certificateId**: Full certificate hash ID
+- Returns signature verification status
+
+**Example Success Response:**
+
+```json
+{
+  "status": "SIGNATURE_VALID",
+  "message": "Institutional signature is valid"
+}
+```
+
 ## Error Responses
 
 All endpoints may return the following error responses:
@@ -454,6 +532,17 @@ All endpoints may return the following error responses:
 }
 ```
 
+### 404 Not Found (Short Code)
+
+```json
+{
+  "code": "CODE_NOT_FOUND",
+  "message": "Certificate with this code does not exist",
+  "shortCode": "A1B2",
+  "availableCodes": []
+}
+```
+
 ## Notes for Frontend Developers
 
 1. All requests should include appropriate error handling
@@ -466,5 +555,6 @@ All endpoints may return the following error responses:
 8. File size limits:
    - Maximum PDF size: 10MB
    - Supported formats: PDF only
-9. Pagination is available for list endpoints
-10. All timestamps are in ISO 8601 format
+9. Short codes are 4-character uppercase alphanumeric values
+10. Institutional signature verification is currently in development mode
+11. Use verificationId for tracking verification attempts in logs

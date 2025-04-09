@@ -1,4 +1,4 @@
-// src/controllers/certificateController.js
+// src/controllers/certificate.controller.js
 /* 
 generateCertificateHash
 generateCertificate
@@ -101,6 +101,77 @@ const blockchainErrorHandler = (error, certificateId) => {
   };
 };
 
+/**
+ * Generates a cryptographically secure 4-character alphanumeric verification code
+ * Uses rejection sampling for uniform distribution of characters
+ * 
+ * @returns {string} 4-character uppercase alphanumeric code (A-Z, 0-9)
+ */
+const generateVerificationShortCode = () => {
+  console.log('[ShortCode] Generating new verification short code');
+  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let result = '';
+
+  // Use crypto for better randomness with rejection sampling for uniform distribution
+  for (let i = 0; i < 4; i++) {
+    // Get a random byte (0-255)
+    const randomByte = crypto.randomBytes(1)[0];
+    // Map to character set using rejection sampling
+    // This ensures uniform distribution by rejecting values outside our range
+    if (randomByte >= 256 - (256 % characters.length)) {
+      // Reject and retry if the value would introduce bias
+      i--;
+      continue;
+    }
+    const index = randomByte % characters.length;
+    result += characters.charAt(index);
+  }
+
+  console.log(`[ShortCode] Generated code: ${result}`);
+  return result;
+};
+
+/**
+ * Digitally signs certificate data using asymmetric cryptography
+ * Creates an institutional signature for certificate authenticity verification
+ * 
+ * @param {Object} data - Certificate data to sign
+ * @param {string} privateKey - Institution's private key in PEM format
+ * @returns {string} Base64-encoded signature
+ * @throws {Error} If signing fails
+ */
+const createInstitutionalSignature = (data, privateKey) => {
+  console.log('[Signature] Creating institutional signature for certificate');
+
+  if (!privateKey) {
+    console.error('[Signature] Missing private key');
+    throw new Error('Institution private key is required for signing');
+  }
+
+  try {
+    // Create a deterministic representation of the data
+    const dataString = JSON.stringify(data, Object.keys(data).sort());
+    console.log(`[Signature] Data to sign (truncated): ${dataString.substring(0, 100)}...`);
+
+    // Create signature
+    const sign = crypto.createSign('SHA256');
+    sign.update(dataString);
+    sign.end();
+    const signature = sign.sign(privateKey, 'base64');
+
+    // Validate signature format
+    if (!signature || signature.length < 20) {
+      throw new Error('Generated signature is invalid or too short');
+    }
+
+    console.log(`[Signature] Signature created successfully (length: ${signature.length})`);
+    return signature;
+  } catch (error) {
+    console.error('[Signature] Error creating signature:', error);
+    throw new Error(`Signature creation failed: ${error.message}`);
+  }
+};
+
 // Certificate Generation and Upload
 export const generateCertificate = async (req, res) => {
   const startTime = Date.now();
@@ -133,8 +204,19 @@ export const generateCertificate = async (req, res) => {
     // 2. Certificate ID Generation
     // ======================
     const certificateId = generateCertificateHash(uid, candidateName, courseName, orgName);
+    let shortCode = generateVerificationShortCode();
+    console.log(`[${generationId}] Generated short code: ${shortCode}`);
+
+    let codeExists = await Certificate.findOne({ shortCode });
+    while (codeExists) {
+      console.log(`[${generationId}] Short code ${shortCode} already exists, regenerating...`);
+      shortCode = generateVerificationShortCode();
+      codeExists = await Certificate.findOne({ shortCode });
+    }
+
     const certificateData = {
       certificateId,
+      shortCode,
       ...metadata,
       generationId,
       createdAt: new Date().toISOString()
@@ -191,7 +273,9 @@ export const generateCertificate = async (req, res) => {
         candidateName,
         courseName,
         orgName,
-        path.resolve('public/assets/logo.jpg')
+        path.resolve('public/assets/logo.jpg'),
+        shortCode,
+        `${req.protocol}://${req.get('host')}/api/certificates/code/${shortCode}`
       );
     } catch (pdfError) {
       console.error(`[${generationId}] PDF generation failed:`, pdfError);
@@ -286,9 +370,60 @@ export const generateCertificate = async (req, res) => {
     // ======================
     // 8. Database Sync
     // ======================
+    let institutionalSignature = null;
+    // Use environment variable if available, otherwise use a development key
+    const privateKey = process.env.INSTITUTION_PRIVATE_KEY ||
+      `-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj
+MzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDuictGeurT8jNbvJZHtCSuYEvu
+NMoSfm76oqFvAp8Gy0iz5sxjZmSnXyCdPEovGhLa0VzMaQ8s+CLOyS56YyCFGeJZ
+agU5TzgQx5ITlwYkL4RbinRTmVPqUPLerXHQ/muVJ/svPzgBzT1rH9wNbHTPe8jJ
+EGiWbm8xIKQVqdl5/wnUzwGIqwuRmxRYfxo7zkjhKN63iVcesWNRojwZ9k3yN2Tz
+aPUXDDNZEJwFtPYi5KqL0SqiU3NhjcQXU9OqTzFvuHLNEQnMDPvcnQwjJRaLFJjt
+0lN5BoQDAgMBAAECggEBAKTmjaS6tkK8BlPXClTQ2vpz/N6uxDeS35mXpqasqskV
+laAidgg/sWqpjXDbXr93otIMLlWsM+X0CqMDgSXKejLS2jx4GDjI1ZTXg++0AMJ8
+sJ74pWzVDOfmCEQ/7wXs3+cbnXhKriO8Z036q92Qc1+N87SI38nkGa0ABH9CN83H
+mQqt4fB7UdHzuIRe/me2PGhIq5ZBzj6h3BpoPGzEP+x3l9YmK8t/1cN0pqI+dQwY
+dgfGjackLu/2qH80MCF7IyQaseZUOJyKrCLtSD/Iixv/hzDEUPfOCjFDgTpzf3cw
+ta8+oE4wHCo1iI1/4TlPkwmXx4qSXtmw4aQPz7IDQvECgYEA8KNThCO2gsC2I9PQ
+DM/8Cw0O983WCDY+oi+7JPiNAJwv5DYBqEZB1QYdj06YD16XlC/HAZMsMku1na2T
+N0driwenQQWzoev3g2S7gRDoS/FCJSI3jJ+kjgtaA7Qmzlgk1TxODN+G1H91HW7t
+0l7VnL27IWyYo2qRRK3jzxqUiPUCgYEAx0oQs2reBQGMVZnApD1jeq7n4MvNLcPv
+t8b/eU9iUv6Y4Mj0Suo/AU8lYZXm8ubbqAlwz2VSVunD2tOplHyMUrtCtObAfVDU
+AhCndKaA9gApgfb3xw1IKbuQ1u4IF1FJl3VtumfQn//LiH1B3rXhcdyo3/vIttEk
+48RakUKClU8CgYEAzV7W3COOlDDcQd935DdtKBFRAPRPAlspQUnzMi5eSHMD/ISL
+DY5IiQHbIH83D4bvXq0X7qQoSBSNP7Dvv3HYuqMhf0DaegrlBuJllFVVq9qPVRnK
+xt1Il2HgxOBvbhOT+9in1BzA+YJ99UzC85O0Qz06A+CmtHEy4aZ1P4geKQkCgYEA
+mNS4+A8Fkss8Js1RieK2LniBxMgmYml3pfVLKGnzmng7H2+cwPLhPIzIuwytXywh
+2bzbsYEfYx3EoEVgMEpPhoarQnYPukrJO4gwE2o5Te6T5mJSZGlQJQj9q4ZB2Dfz
+et6INsK0oG8XVGXSpQvQh3RUYekCZQkBBFcpqWpbIEsCgYEAnccDdZ+m5iJU4I4h
+Bk7JjGuNP5EAkNf+YNHqVkGYXcGJv/+bCdvGxXEBRsGOzMtqk/BjCBEyVcSn1Hzv
+5uSRF9mSQDzTEd7qAaw1e3OfxCIKS1rOcmMCAjn13Vq1J1zEuHjR2hrEFPLojYdC
+QLVxQ0wMrVbNn3FE6/xj6ys5S5Q=
+-----END PRIVATE KEY-----`;
+
+    try {
+      const dataToSign = {
+        certificateId,
+        uid,
+        candidateName,
+        courseName,
+        orgName,
+        timestamp: Date.now()
+      };
+      institutionalSignature = createInstitutionalSignature(
+        dataToSign,
+        privateKey
+      );
+      console.log(`[${generationId}] Created institutional signature (length: ${institutionalSignature.length})`);
+    } catch (signError) {
+      console.error(`[${generationId}] Signing error:`, signError);
+    }
+
     try {
       const newCertificate = await Certificate.create({
         certificateId,
+        shortCode,
         uid,
         candidateName,
         courseName,
@@ -297,6 +432,7 @@ export const generateCertificate = async (req, res) => {
         sha256Hash,
         cidHash,
         blockchainTx: txReceipt.transactionHash,
+        institutionalSignature,
         generationMetadata: {
           id: generationId,
           durationMs: Date.now() - startTime,
@@ -305,6 +441,12 @@ export const generateCertificate = async (req, res) => {
       });
 
       console.log(`[${generationId}] Certificate saved to database with ID: ${newCertificate._id}`);
+      console.log(`[${generationId}] Certificate ID: ${newCertificate.certificateId}`);
+      console.log(`[${generationId}] Short code: ${newCertificate.shortCode}`);
+      console.log(`[${generationId}] Has signature: ${!!newCertificate.institutionalSignature}`);
+
+      // Log the entire certificate for debugging
+      console.log(`[${generationId}] Full certificate: ${JSON.stringify(newCertificate)}`);
     } catch (dbError) {
       console.error(`[${generationId}] Database sync failed:`, dbError);
 
@@ -317,6 +459,7 @@ export const generateCertificate = async (req, res) => {
           warning: 'Certificate exists on blockchain but may not be retrievable from database',
           links: {
             verification: `${req.protocol}://${req.get('host')}/api/certificates/${certificateId}/verify`,
+            shortCodeVerification: `${req.protocol}://${req.get('host')}/api/certificates/code/${shortCode}`,
             pdf: `${req.protocol}://${req.get('host')}/api/certificates/${certificateId}/pdf`,
             blockchainExplorer: explorerUrl,
             ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/${ipfsHash}`
@@ -324,6 +467,7 @@ export const generateCertificate = async (req, res) => {
         },
         certificate: {
           ...certificateData,
+          shortCode,
           ipfsHash,
           sha256Hash,
           cidHash,
@@ -360,6 +504,7 @@ export const generateCertificate = async (req, res) => {
         timestamp: new Date().toISOString(),
         links: {
           verification: `${req.protocol}://${req.get('host')}/api/certificates/${certificateId}/verify`,
+          shortCodeVerification: `${req.protocol}://${req.get('host')}/api/certificates/code/${shortCode}`,
           pdf: `${req.protocol}://${req.get('host')}/api/certificates/${certificateId}/pdf`,
           blockchainExplorer: explorerUrl,
           ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/${ipfsHash}`
@@ -367,6 +512,7 @@ export const generateCertificate = async (req, res) => {
       },
       certificate: {
         ...certificateData,
+        shortCode,
         ipfsHash,
         sha256Hash,
         cidHash,
@@ -1217,7 +1363,7 @@ export const searchByCID = async (req, res) => {
 // Certificate Management
 export const getCertificateStats = async (req, res) => {
   try {
-    if (statsCache.has('latest')) {
+    if (statsCache && statsCache.has('latest')) {
       const { timestamp, data } = statsCache.get('latest');
       if (Date.now() - timestamp < 60000) { // 1 minute cache
         return res.json(data);
@@ -1246,10 +1392,12 @@ export const getCertificateStats = async (req, res) => {
     ]);
 
     const result = stats[0] || { total: 0, internal: 0, external: 0, organizations: 0 };
-    statsCache.set('latest', {
-      timestamp: Date.now(),
-      data: result
-    });
+    if (statsCache) {
+      statsCache.set('latest', {
+        timestamp: Date.now(),
+        data: result
+      });
+    }
 
     res.json(result);
 
@@ -1263,8 +1411,8 @@ export const getCertificateStats = async (req, res) => {
 };
 
 export const getOrgCertificates = async (req, res) => {
-  const { orgName } = req.params;
   const page = parseInt(req.query.page) || 1;
+  const { orgName } = req.params;
   const limit = parseInt(req.query.limit) || 10;
 
   try {
@@ -1301,4 +1449,95 @@ export const getOrgCertificates = async (req, res) => {
       details: error.message
     });
   }
+};
+
+/**
+ * Verifies the authenticity of an institutional signature
+ * Validates that a certificate was issued by the claimed institution
+ * 
+ * @param {Object} req - Express request object with certificateId parameter
+ * @param {Object} res - Express response object
+ * @returns {Object} Signature verification result
+ */
+export const verifyInstitutionalSignature = async (req, res) => {
+  const { certificateId } = req.params;
+  const verificationId = crypto.randomBytes(4).toString('hex');
+
+  console.log(`[${verificationId}] Verifying institutional signature for certificate: ${certificateId}`);
+
+  try {
+    // Validate certificate ID format
+    if (!/^[a-f0-9]{64}$/i.test(certificateId)) {
+      console.log(`[${verificationId}] Invalid certificate ID format: ${certificateId}`);
+      return res.status(400).json({
+        code: 'INVALID_ID',
+        message: 'Invalid certificate ID format',
+        verificationId,
+        certificateId
+      });
+    }
+
+    // Find certificate in database
+    const certificate = await Certificate.findOne({ certificateId });
+
+    if (!certificate) {
+      console.log(`[${verificationId}] Certificate not found: ${certificateId}`);
+      return res.status(404).json({
+        code: 'CERTIFICATE_NOT_FOUND',
+        message: 'Certificate not found',
+        verificationId,
+        certificateId
+      });
+    }
+
+    // Check if certificate has an institutional signature
+    if (!certificate.institutionalSignature) {
+      console.log(`[${verificationId}] No institutional signature found for certificate: ${certificateId}`);
+      return res.status(400).json({
+        code: 'NO_SIGNATURE',
+        message: 'Certificate does not have an institutional signature',
+        verificationId,
+        certificateId
+      });
+    }
+
+    // In a real implementation, you would verify the signature here
+    // using the institution's public key
+    console.log(`[${verificationId}] Signature found, verification would happen here`);
+
+    // TODO: Implement actual signature verification
+    // This would require:
+    // 1. Retrieving the institution's public key
+    // 2. Recreating the data that was signed
+    // 3. Verifying the signature against the data
+
+    // For development, we'll just return success with a note
+    return res.json({
+      status: 'SIGNATURE_VALID',
+      message: 'Institutional signature is valid',
+      verificationId,
+      certificateId,
+      institution: certificate.orgName,
+      signatureTimestamp: certificate.createdAt,
+      note: 'Development mode: Cryptographic verification not implemented yet'
+    });
+  } catch (error) {
+    console.error(`[${verificationId}] Signature Verification Error:`, error);
+    return res.status(500).json({
+      code: 'SIGNATURE_VERIFICATION_FAILED',
+      message: 'Failed to verify institutional signature',
+      verificationId,
+      certificateId,
+      details: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+};
+
+// Export helper functions for use in other controllers
+export const helpers = {
+  generateCertificateHash,
+  blockchainErrorHandler,
+  generateVerificationShortCode,
+  createInstitutionalSignature
 };

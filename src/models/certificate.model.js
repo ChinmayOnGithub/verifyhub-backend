@@ -4,6 +4,8 @@ import mongoose from 'mongoose';
 const CertificateSchema = new mongoose.Schema(
   {
     certificateId: { type: String, required: true, unique: true },
+    shortCode: { type: String, required: true, unique: true, uppercase: true },
+    institutionalSignature: { type: String },
     uid: { type: String, required: true },
     candidateName: { type: String, required: true },
     courseName: { type: String, required: true },
@@ -29,6 +31,7 @@ const CertificateSchema = new mongoose.Schema(
     timestamps: true,
     indexes: [
       { certificateId: 1 },
+      { shortCode: 1 },
       { ipfsHash: 1 },
       { sha256Hash: 1 },
       { cidHash: 1 },

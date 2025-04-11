@@ -181,10 +181,8 @@ const createInstitutionalSignature = (data, privateKey) => {
 
 // Certificate Generation and Upload
 export const generateCertificate = async (req, res) => {
-  const generationId = crypto.randomBytes(4).toString('hex');
   const startTime = Date.now();
-
-  console.log(`[${generationId}] Starting certificate generation`);
+  const generationId = crypto.randomBytes(8).toString('hex');
 
   try {
     const { uid, candidateName, courseName, orgName } = req.body;
@@ -269,7 +267,7 @@ export const generateCertificate = async (req, res) => {
     }
 
     // ======================
-    // 4. PDF Generation
+    // 4. PDF Generation - Fixed function name and parameters
     // ======================
     const outputDir = path.resolve('uploads');
     const pdfFilePath = path.join(outputDir, `cert_${generationId}.pdf`);
@@ -300,254 +298,109 @@ export const generateCertificate = async (req, res) => {
     }
 
     // ======================
-    // 5. Compute PDF Hashes
+    // 5. IPFS Upload
     // ======================
-    let sha256Hash, cidHash;
+    let ipfsData;
     try {
       const pdfBuffer = await fs.promises.readFile(pdfFilePath);
-      const hashes = await computePDFHashes(pdfBuffer);
-      sha256Hash = hashes.sha256Hash;
-      cidHash = hashes.cidHash;
-      console.log(`[${generationId}] Computed hashes:`, { sha256Hash, cidHash });
-    } catch (hashError) {
-      console.error(`[${generationId}] Hash computation failed:`, hashError);
+      ipfsData = await uploadToIPFS(pdfBuffer, `cert_${generationId}.pdf`);
+    } catch (ipfsError) {
+      console.error(`[${generationId}] IPFS upload failed:`, ipfsError);
       return res.status(500).json({
         error: {
-          code: 'HASH_COMPUTATION_FAILED',
-          message: 'Failed to compute PDF hashes',
-          details: hashError.message
+          code: 'IPFS_UPLOAD_FAILED',
+          message: 'Failed to upload certificate to IPFS',
+          details: ipfsError.message
         },
         meta: certificateData
       });
     }
 
     // ======================
-    // 6. IPFS Upload
+    // 6. Blockchain Registration
     // ======================
-    let ipfsHash;
-    try {
-      ipfsHash = await uploadBufferToPinata(pdfBuffer, `${candidateName}_${courseName}_Certificate.pdf`);
-      new CID(ipfsHash); // Validate CID format
-    } catch (ipfsError) {
-      console.error(`[${generationId}] IPFS operation failed:`, ipfsError);
-      return res.status(502).json({
-        error: {
-          code: ipfsError instanceof CID.CIDError ? 'INVALID_CID' : 'IPFS_UPLOAD_FAILED',
-          message: 'IPFS operation failed',
-          details: ipfsError.message,
-          cid: ipfsHash || 'N/A'
-        },
-        meta: certificateData
-      });
-    } finally {
-      await fs.promises.unlink(pdfFilePath).catch(() => { });
-    }
-
-    // ======================
-    // 7. Blockchain Transaction (Updated)
-    // ======================
-    let txReceipt;
     try {
       const accounts = await web3.eth.getAccounts();
-      txReceipt = await contract.methods
-        .generateCertificate(certificateId, uid, candidateName, courseName, orgName, ipfsHash)
-        .send({
-          from: accounts[0],
-          gas: 500000,
-          gasPrice: web3.utils.toWei('20', 'gwei')
-        });
+      const tx = await contract.methods
+        .generateCertificate(
+          certificateId,
+          uid,
+          candidateName,
+          courseName,
+          orgName,
+          ipfsData.ipfsHash
+        )
+        .send({ from: accounts[0], gas: 1000000 });
 
-      // Convert BigInt values to strings
-      txReceipt = {
-        ...txReceipt,
-        blockNumber: txReceipt.blockNumber?.toString(),
-        gasUsed: txReceipt.gasUsed?.toString(),
-        cumulativeGasUsed: txReceipt.cumulativeGasUsed?.toString()
-      };
+      certificateData.blockchainTx = tx.transactionHash;
     } catch (blockchainError) {
-      const { statusCode, error } = blockchainErrorHandler(blockchainError, certificateId);
-      return res.status(statusCode).json({
-        error,
-        meta: {
-          ...certificateData,
-          ipfsHash,
-          blockchainAttempted: true
-        }
+      console.error(`[${generationId}] Blockchain registration failed:`, blockchainError);
+      return res.status(500).json({
+        error: {
+          code: 'BLOCKCHAIN_REGISTRATION_FAILED',
+          message: 'Failed to register certificate on blockchain',
+          details: blockchainError.message
+        },
+        meta: certificateData
       });
     }
 
     // ======================
-    // 8. Database Sync
+    // 7. Database Save
     // ======================
-    let institutionalSignature = null;
-    // Use environment variable if available, otherwise use a development key
-    const privateKey = process.env.INSTITUTION_PRIVATE_KEY ||
-      `-----BEGIN PRIVATE KEY-----
-MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj
-MzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDuictGeurT8jNbvJZHtCSuYEvu
-NMoSfm76oqFvAp8Gy0iz5sxjZmSnXyCdPEovGhLa0VzMaQ8s+CLOyS56YyCFGeJZ
-agU5TzgQx5ITlwYkL4RbinRTmVPqUPLerXHQ/muVJ/svPzgBzT1rH9wNbHTPe8jJ
-EGiWbm8xIKQVqdl5/wnUzwGIqwuRmxRYfxo7zkjhKN63iVcesWNRojwZ9k3yN2Tz
-aPUXDDNZEJwFtPYi5KqL0SqiU3NhjcQXU9OqTzFvuHLNEQnMDPvcnQwjJRaLFJjt
-0lN5BoQDAgMBAAECggEBAKTmjaS6tkK8BlPXClTQ2vpz/N6uxDeS35mXpqasqskV
-laAidgg/sWqpjXDbXr93otIMLlWsM+X0CqMDgSXKejLS2jx4GDjI1ZTXg++0AMJ8
-sJ74pWzVDOfmCEQ/7wXs3+cbnXhKriO8Z036q92Qc1+N87SI38nkGa0ABH9CN83H
-mQqt4fB7UdHzuIRe/me2PGhIq5ZBzj6h3BpoPGzEP+x3l9YmK8t/1cN0pqI+dQwY
-dgfGjackLu/2qH80MCF7IyQaseZUOJyKrCLtSD/Iixv/hzDEUPfOCjFDgTpzf3cw
-ta8+oE4wHCo1iI1/4TlPkwmXx4qSXtmw4aQPz7IDQvECgYEA8KNThCO2gsC2I9PQ
-DM/8Cw0O983WCDY+oi+7JPiNAJwv5DYBqEZB1QYdj06YD16XlC/HAZMsMku1na2T
-N0driwenQQWzoev3g2S7gRDoS/FCJSI3jJ+kjgtaA7Qmzlgk1TxODN+G1H91HW7t
-0l7VnL27IWyYo2qRRK3jzxqUiPUCgYEAx0oQs2reBQGMVZnApD1jeq7n4MvNLcPv
-t8b/eU9iUv6Y4Mj0Suo/AU8lYZXm8ubbqAlwz2VSVunD2tOplHyMUrtCtObAfVDU
-AhCndKaA9gApgfb3xw1IKbuQ1u4IF1FJl3VtumfQn//LiH1B3rXhcdyo3/vIttEk
-48RakUKClU8CgYEAzV7W3COOlDDcQd935DdtKBFRAPRPAlspQUnzMi5eSHMD/ISL
-DY5IiQHbIH83D4bvXq0X7qQoSBSNP7Dvv3HYuqMhf0DaegrlBuJllFVVq9qPVRnK
-xt1Il2HgxOBvbhOT+9in1BzA+YJ99UzC85O0Qz06A+CmtHEy4aZ1P4geKQkCgYEA
-mNS4+A8Fkss8Js1RieK2LniBxMgmYml3pfVLKGnzmng7H2+cwPLhPIzIuwytXywh
-2bzbsYEfYx3EoEVgMEpPhoarQnYPukrJO4gwE2o5Te6T5mJSZGlQJQj9q4ZB2Dfz
-et6INsK0oG8XVGXSpQvQh3RUYekCZQkBBFcpqWpbIEsCgYEAnccDdZ+m5iJU4I4h
-Bk7JjGuNP5EAkNf+YNHqVkGYXcGJv/+bCdvGxXEBRsGOzMtqk/BjCBEyVcSn1Hzv
-5uSRF9mSQDzTEd7qAaw1e3OfxCIKS1rOcmMCAjn13Vq1J1zEuHjR2hrEFPLojYdC
-QLVxQ0wMrVbNn3FE6/xj6ys5S5Q=
------END PRIVATE KEY-----`;
-
     try {
-      const dataToSign = {
-        certificateId,
-        uid,
-        candidateName,
-        courseName,
-        orgName,
-        timestamp: Date.now()
-      };
-      institutionalSignature = createInstitutionalSignature(
-        dataToSign,
-        privateKey
-      );
-      console.log(`[${generationId}] Created institutional signature (length: ${institutionalSignature.length})`);
-    } catch (signError) {
-      console.error(`[${generationId}] Signing error:`, signError);
-    }
-
-    try {
-      const newCertificate = await Certificate.create({
+      await Certificate.create({
         certificateId,
         shortCode,
         uid,
         candidateName,
         courseName,
         orgName,
-        ipfsHash,
-        sha256Hash,
-        cidHash,
-        blockchainTx: txReceipt.transactionHash,
-        institutionalSignature,
-        generationMetadata: {
-          id: generationId,
-          durationMs: Date.now() - startTime,
-          nodeVersion: process.version
-        }
+        ipfsHash: ipfsData.ipfsHash,
+        sha256Hash: ipfsData.sha256Hash,
+        cidHash: ipfsData.cidHash,
+        blockchainTx: certificateData.blockchainTx,
+        source: 'internal' // Changed from 'generated' to 'internal'
       });
-
-      console.log(`[${generationId}] Certificate saved to database with ID: ${newCertificate._id}`);
-      console.log(`[${generationId}] Certificate ID: ${newCertificate.certificateId}`);
-      console.log(`[${generationId}] Short code: ${newCertificate.shortCode}`);
-      console.log(`[${generationId}] Has signature: ${!!newCertificate.institutionalSignature}`);
-
-      // Log the entire certificate for debugging
-      console.log(`[${generationId}] Full certificate: ${JSON.stringify(newCertificate)}`);
     } catch (dbError) {
-      console.error(`[${generationId}] Database sync failed:`, dbError);
-
-      // Return a partial success response with a warning
-      return res.status(201).json({
-        success: {
-          code: 'CERTIFICATE_ISSUED_WITH_WARNING',
-          message: 'Certificate generated but database sync failed',
-          timestamp: new Date().toISOString(),
-          warning: 'Certificate exists on blockchain but may not be retrievable from database',
-          links: {
-            verification: `${req.protocol}://${req.get('host')}/api/certificates/${certificateId}/verify`,
-            shortCodeVerification: `${req.protocol}://${req.get('host')}/api/certificates/code/${shortCode}`,
-            pdf: `${req.protocol}://${req.get('host')}/api/certificates/${certificateId}/pdf`,
-            blockchainExplorer: explorerUrl,
-            ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/ipfs/${ipfsHash}`
-          }
+      console.error(`[${generationId}] Database save failed:`, dbError);
+      return res.status(500).json({
+        error: {
+          code: 'DATABASE_SAVE_FAILED',
+          message: 'Failed to save certificate to database',
+          details: dbError.message
         },
-        certificate: {
-          ...certificateData,
-          shortCode,
-          ipfsHash,
-          sha256Hash,
-          cidHash,
-          revoked: false,
-          timestamp: Date.now()
-        },
-        transaction: {
-          hash: txReceipt.transactionHash,
-          block: txReceipt.blockNumber?.toString(),
-          gasUsed: txReceipt.gasUsed?.toString(),
-          networkId: networkId.toString()
-        },
-        system: {
-          generationId,
-          durationMs: (Date.now() - startTime).toString(),
-          commitHash: process.env.GIT_COMMIT_HASH || 'unknown',
-          dbError: process.env.NODE_ENV === 'development' ? dbError.message : 'Database sync failed'
-        }
+        meta: certificateData
       });
     }
-    // ======================
-    // 9. Final Response (Updated)
-    // ======================
-    const networkId = (await web3.eth.net.getId()).toString(); // Convert to string
 
-    const explorerUrl = networkId === "5777" // Compare as string
-      ? `http://localhost:8545/tx/${txReceipt.transactionHash}`
-      : `https://etherscan.io/tx/${txReceipt.transactionHash}`;
-
+    // ======================
+    // 8. Success Response
+    // ======================
     return res.status(201).json(successResponse({
       certificateId,
       shortCode,
-      ipfsHash,
-      sha256Hash,
-      cidHash,
-      revoked: false,
-      timestamp: Date.now(),
-      _links: {
-        verification: `${req.protocol}://${req.get('host')}/api/certificates/${certificateId}/verify`,
-        shortCodeVerification: `${req.protocol}://${req.get('host')}/api/certificates/code/${shortCode}`,
-        pdf: `${req.protocol}://${req.get('host')}/api/certificates/${certificateId}/pdf`,
-        blockchainExplorer: explorerUrl,
-        ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/ipfs/${ipfsHash}`
-      },
+      verificationUrl: `/api/certificates/${certificateId}/verify`,
+      ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/ipfs/${ipfsData.ipfsHash}`,
       transaction: {
-        hash: txReceipt.transactionHash,
-        block: txReceipt.blockNumber?.toString(),
-        gasUsed: txReceipt.gasUsed?.toString(),
-        networkId: networkId.toString()
+        hash: certificateData.blockchainTx
       },
-      system: {
-        generationId,
-        durationMs: (Date.now() - startTime).toString(),
-        commitHash: process.env.GIT_COMMIT_HASH || 'unknown'
+      computedHashes: {
+        sha256Hash: ipfsData.sha256Hash,
+        cidHash: ipfsData.cidHash,
+        ipfsHash: ipfsData.ipfsHash
       }
-    }, 'Certificate successfully generated', 201));
-
+    }, 'Certificate generated successfully', 201));
   } catch (error) {
     console.error(`[${generationId}] Critical failure:`, error);
-    const { response, statusCode } = errorResponse(
-      'INTERNAL_ERROR',
-      'Unexpected system failure',
-      {
-        details: process.env.NODE_ENV === 'development' ? error.message : undefined,
-        reportUrl: `https://api.yourservice.com/error-report/${generationId}`,
-        critical: true,
-        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    return res.status(500).json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Unexpected system failure',
+        details: error.message
       },
-      generationId
-    );
-    return res.status(statusCode).json(response);
+      meta: { generationId }
+    });
   }
 };
 

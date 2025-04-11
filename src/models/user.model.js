@@ -81,30 +81,56 @@ UserSchema.methods = {
 
   trackLogin: function (req) {
     this.lastLogin = Date.now();
+    if (!this.loginHistory) this.loginHistory = [];
     this.loginHistory.push({
       timestamp: Date.now(),
-      ipAddress: req.ip,
-      userAgent: req.headers['user-agent']
+      ipAddress: req.ip || 'unknown',
+      userAgent: req.headers['user-agent'] || 'unknown'
     });
     if (this.loginHistory.length > 10) this.loginHistory.shift();
   },
 
   generateAuthToken: function () {
-    return jwt.sign(
-      { id: this._id, role: this.role },
-      process.env.JWT_SECRET,
-      { expiresIn: '1h' }
-    );
+    try {
+      // Make sure JWT_SECRET exists
+      if (!process.env.JWT_SECRET) {
+        console.error('JWT_SECRET environment variable is not defined');
+        throw new Error('JWT configuration error');
+      }
+
+      return jwt.sign(
+        { id: this._id, role: this.role },
+        process.env.JWT_SECRET,
+        { expiresIn: '1h' }
+      );
+    } catch (error) {
+      console.error('Error generating auth token:', error);
+      throw new Error('Failed to generate authentication token: ' + error.message);
+    }
   },
 
   generateRefreshToken: function () {
-    const refreshToken = jwt.sign(
-      { id: this._id },
-      process.env.REFRESH_SECRET,
-      { expiresIn: '7d' }
-    );
-    this.refreshToken = refreshToken;
-    return refreshToken;
+    try {
+      // Make sure REFRESH_SECRET exists
+      if (!process.env.REFRESH_SECRET) {
+        console.error('REFRESH_SECRET environment variable is not defined');
+        throw new Error('Refresh token configuration error');
+      }
+
+      const refreshToken = jwt.sign(
+        { id: this._id },
+        process.env.REFRESH_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      // Store the refresh token on the user model
+      this.refreshToken = refreshToken;
+
+      return refreshToken;
+    } catch (error) {
+      console.error('Error generating refresh token:', error);
+      throw new Error('Failed to generate refresh token: ' + error.message);
+    }
   }
 };
 

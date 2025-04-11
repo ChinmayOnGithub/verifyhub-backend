@@ -80,7 +80,6 @@ export const initializeBlockchain = async (retries = config.healthCheck.retries)
     return false;
   }
 };
-
 // ========== ENHANCEMENT 5: Status-aware getters ==========
 export const getWeb3 = () => {
   if (!web3) throw new Error('Web3 not initialized');

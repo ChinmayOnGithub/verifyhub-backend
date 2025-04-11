@@ -77,10 +77,6 @@ contract Certification {
     {
         Certificate memory c = certificates[certificateId];
         require(bytes(c.uid).length != 0, "Certificate not found"); // Changed check to uid
-        // require(
-        //     bytes(certificates[certificateId].ipfsHash).length != 0,
-        //     "Certificate not found"
-        // );
         return (
             c.uid,
             c.candidateName,

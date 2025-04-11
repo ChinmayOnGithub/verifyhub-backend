@@ -5,6 +5,7 @@ import healthRoutes from './routes/health.routes.js';         // Updated path
 import certificateRoutes from './routes/certificate.routes.js'; // Updated path
 import cors from 'cors';
 import morgan from 'morgan';
+import { errorHandler } from './utils/errorUtils.js';
 
 const app = express();
 
@@ -22,14 +23,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/certificates', certificateRoutes);
 app.use('/api/health', healthRoutes); // Updated this line
 
-// Global error handler
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({
-    code: 'INTERNAL_SERVER_ERROR',
-    message: 'Something went wrong!',
-    details: process.env.NODE_ENV === 'development' ? err.message : undefined
-  });
-});
+// Add global error handler (must be after routes)
+app.use(errorHandler);
 
+// Export app
 export default app;

@@ -46,6 +46,7 @@ router.post('/debug/pdf', apiLimiter, pdfUploadMemory.single('certificate'), deb
 // New Short Code Verification Route (Public) - Now using the new controller
 router.get('/code/:shortCode', apiLimiter, verifyCertificateByShortCode);
 
+
 // New Institutional Signature Verification Route (Public) - Now using the new controller
 router.get('/:certificateId/signature/verify', apiLimiter, verifyInstitutionalSignature);
 

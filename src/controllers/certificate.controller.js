@@ -43,6 +43,13 @@ import {
   uploadToIPFS,
   findCertificateByAnyHash
 } from '../utils/certificateUtils.js';
+import {
+  successResponse,
+  verificationResponse,
+  warningResponse
+} from '../utils/responseUtils.js';
+import { errorResponse, ErrorCodes } from '../utils/errorUtils.js';
+import { uploadBufferToPinata } from '../utils/pinata.js';
 
 BigInt.prototype.toJSON = function () { return this.toString(); };
 const BLOCK_EXPLORER_URL = 'http://localhost:8545'
@@ -174,8 +181,10 @@ const createInstitutionalSignature = (data, privateKey) => {
 
 // Certificate Generation and Upload
 export const generateCertificate = async (req, res) => {
+  const generationId = crypto.randomBytes(4).toString('hex');
   const startTime = Date.now();
-  const generationId = crypto.randomBytes(8).toString('hex');
+
+  console.log(`[${generationId}] Starting certificate generation`);
 
   try {
     const { uid, candidateName, courseName, orgName } = req.body;
@@ -317,7 +326,7 @@ export const generateCertificate = async (req, res) => {
     // ======================
     let ipfsHash;
     try {
-      ipfsHash = await pinata.uploadToPinata(pdfFilePath);
+      ipfsHash = await uploadBufferToPinata(pdfBuffer, `${candidateName}_${courseName}_Certificate.pdf`);
       new CID(ipfsHash); // Validate CID format
     } catch (ipfsError) {
       console.error(`[${generationId}] IPFS operation failed:`, ipfsError);
@@ -462,7 +471,7 @@ QLVxQ0wMrVbNn3FE6/xj6ys5S5Q=
             shortCodeVerification: `${req.protocol}://${req.get('host')}/api/certificates/code/${shortCode}`,
             pdf: `${req.protocol}://${req.get('host')}/api/certificates/${certificateId}/pdf`,
             blockchainExplorer: explorerUrl,
-            ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/${ipfsHash}`
+            ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/ipfs/${ipfsHash}`
           }
         },
         certificate: {
@@ -497,65 +506,59 @@ QLVxQ0wMrVbNn3FE6/xj6ys5S5Q=
       ? `http://localhost:8545/tx/${txReceipt.transactionHash}`
       : `https://etherscan.io/tx/${txReceipt.transactionHash}`;
 
-    res.status(201).json({
-      success: {
-        code: 'CERTIFICATE_ISSUED',
-        message: 'Certificate successfully generated',
-        timestamp: new Date().toISOString(),
-        links: {
-          verification: `${req.protocol}://${req.get('host')}/api/certificates/${certificateId}/verify`,
-          shortCodeVerification: `${req.protocol}://${req.get('host')}/api/certificates/code/${shortCode}`,
-          pdf: `${req.protocol}://${req.get('host')}/api/certificates/${certificateId}/pdf`,
-          blockchainExplorer: explorerUrl,
-          ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/${ipfsHash}`
-        }
-      },
-      certificate: {
-        ...certificateData,
-        shortCode,
-        ipfsHash,
-        sha256Hash,
-        cidHash,
-        revoked: false,
-        timestamp: Date.now()
+    return res.status(201).json(successResponse({
+      certificateId,
+      shortCode,
+      ipfsHash,
+      sha256Hash,
+      cidHash,
+      revoked: false,
+      timestamp: Date.now(),
+      _links: {
+        verification: `${req.protocol}://${req.get('host')}/api/certificates/${certificateId}/verify`,
+        shortCodeVerification: `${req.protocol}://${req.get('host')}/api/certificates/code/${shortCode}`,
+        pdf: `${req.protocol}://${req.get('host')}/api/certificates/${certificateId}/pdf`,
+        blockchainExplorer: explorerUrl,
+        ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/ipfs/${ipfsHash}`
       },
       transaction: {
         hash: txReceipt.transactionHash,
-        block: txReceipt.blockNumber?.toString(), // Already safe
-        gasUsed: txReceipt.gasUsed?.toString(),   // Convert to string
-        networkId: networkId.toString()           // Ensure string
+        block: txReceipt.blockNumber?.toString(),
+        gasUsed: txReceipt.gasUsed?.toString(),
+        networkId: networkId.toString()
       },
       system: {
         generationId,
-        durationMs: (Date.now() - startTime).toString(), // Convert to string
+        durationMs: (Date.now() - startTime).toString(),
         commitHash: process.env.GIT_COMMIT_HASH || 'unknown'
       }
-    });
+    }, 'Certificate successfully generated', 201));
 
   } catch (error) {
     console.error(`[${generationId}] Critical failure:`, error);
-    res.status(500).json({
-      error: {
-        code: 'UNKNOWN_FAILURE',
-        message: 'Unexpected system failure',
+    const { response, statusCode } = errorResponse(
+      'INTERNAL_ERROR',
+      'Unexpected system failure',
+      {
         details: process.env.NODE_ENV === 'development' ? error.message : undefined,
         reportUrl: `https://api.yourservice.com/error-report/${generationId}`,
-        critical: true
-      },
-      meta: {
-        generationId,
-        timestamp: new Date().toISOString(),
+        critical: true,
         stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-      }
-    });
+      },
+      generationId
+    );
+    return res.status(statusCode).json(response);
   }
 };
 
 export const uploadExternalCertificate = async (req, res) => {
   const uploadId = crypto.randomBytes(4).toString('hex');
+  console.log(`[${uploadId}] Processing external certificate upload`);
 
   try {
+    // Step 1: Validate request
     if (!req.file) {
+      console.log(`[${uploadId}] No file uploaded`);
       return res.status(400).json({
         code: 'MISSING_FILE',
         message: 'No PDF file uploaded',
@@ -566,6 +569,7 @@ export const uploadExternalCertificate = async (req, res) => {
     // Validate required fields
     const { orgName, candidateName } = req.body;
     if (!orgName || !candidateName) {
+      console.log(`[${uploadId}] Missing required fields: orgName=${orgName}, candidateName=${candidateName}`);
       return res.status(400).json({
         code: 'MISSING_FIELDS',
         message: 'Organization name and candidate name are required',
@@ -573,95 +577,152 @@ export const uploadExternalCertificate = async (req, res) => {
       });
     }
 
-    // Process file and compute hashes
+    // Step 2: Process file and compute hashes
     const pdfBuffer = req.file.buffer;
+    console.log(`[${uploadId}] PDF received, size: ${pdfBuffer.length} bytes`);
 
-    // Upload to IPFS and get all hash formats
-    const { sha256Hash, cidHash, ipfsHash } = await uploadToIPFS(pdfBuffer, req.file.originalname);
-    console.log(`[${uploadId}] Computed hashes:`, { sha256Hash, cidHash, ipfsHash });
+    // Step 3: Upload to IPFS and get all hash formats
+    let hashData;
+    try {
+      // Using your existing uploadToIPFS function that computes all three hash types
+      hashData = await uploadToIPFS(pdfBuffer, req.file.originalname);
+      const { sha256Hash, cidHash, ipfsHash } = hashData;
+      console.log(`[${uploadId}] Computed hashes:`, { sha256Hash, cidHash, ipfsHash });
+    } catch (ipfsError) {
+      console.error(`[${uploadId}] IPFS upload failed:`, ipfsError);
+      return res.status(500).json({
+        code: 'IPFS_ERROR',
+        message: 'Failed to upload to IPFS',
+        uploadId,
+        details: ipfsError.message
+      });
+    }
 
-    // Generate a unique certificate ID
+    // Step 4: Generate a unique certificate ID and UID
+    const uid = crypto.randomBytes(16).toString('hex');
     const certificateId = generateCertificateHash(
-      crypto.randomBytes(16).toString('hex'),
+      uid,
       candidateName,
       'External Certificate',
       orgName
     );
+    console.log(`[${uploadId}] Generated certificateId: ${certificateId}`);
 
-    // Store on blockchain
-    const accounts = await web3.eth.getAccounts();
-    const tx = await contract.methods
-      .generateCertificate(
-        certificateId,
-        crypto.randomBytes(16).toString('hex'),
-        candidateName,
-        'External Certificate',
-        orgName,
-        ipfsHash  // Use Pinata's IPFS hash for blockchain storage
-      )
-      .send({ from: accounts[0], gas: 1000000 });
+    // Generate a short verification code
+    const shortCode = generateVerificationShortCode();
+    console.log(`[${uploadId}] Generated short code: ${shortCode}`);
 
-    // Save to database with all hash formats
+    // Step 5: Store on blockchain
+    let tx;
+    try {
+      const accounts = await web3.eth.getAccounts();
+      console.log(`[${uploadId}] Using account for transaction: ${accounts[0]}`);
+
+      tx = await contract.methods
+        .generateCertificate(
+          certificateId,
+          uid,
+          candidateName,
+          'External Certificate',
+          orgName,
+          hashData.ipfsHash // Use Pinata's IPFS hash for blockchain storage
+        )
+        .send({ from: accounts[0], gas: 1000000 });
+
+      console.log(`[${uploadId}] Certificate stored on blockchain: ${tx.transactionHash}`);
+    } catch (blockchainError) {
+      console.error(`[${uploadId}] Blockchain storage failed:`, blockchainError);
+      return res.status(500).json({
+        code: 'BLOCKCHAIN_ERROR',
+        message: 'Failed to store certificate on blockchain',
+        uploadId,
+        details: blockchainError.message
+      });
+    }
+
+    // Step 6: Save to database with all hash formats
     try {
       const newCertificate = await Certificate.create({
         certificateId,
-        uid: crypto.randomBytes(16).toString('hex'),
+        uid,
         candidateName,
         courseName: 'External Certificate',
         orgName,
-        ipfsHash,    // Pinata's IPFS hash
-        sha256Hash,  // Direct file hash
-        cidHash,     // Our computed CID
+        ipfsHash: hashData.ipfsHash,
+        sha256Hash: hashData.sha256Hash,
+        cidHash: hashData.cidHash,
         blockchainTx: tx.transactionHash,
+        shortCode,
         source: 'external'
       });
 
       console.log(`[${uploadId}] External certificate saved to database with ID: ${newCertificate._id}`);
 
-      res.status(201).json({
-        status: 'UPLOADED',
-        certificateId,
-        verificationUrl: `/api/certificates/${certificateId}/verify`,
-        ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/${ipfsHash}`,
-        transaction: {
-          hash: tx.transactionHash,
-          block: tx.blockNumber
+      // Step 7: Return success response
+      return res.status(201).json({
+        success: true,
+        status: 'SUCCESS',
+        message: 'Certificate uploaded and verified successfully',
+        data: {
+          certificateId,
+          shortCode,
+          verificationUrl: `/api/certificates/${certificateId}/verify`,
+          ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/ipfs/${hashData.ipfsHash}`,
+          transaction: {
+            hash: tx.transactionHash,
+            block: tx.blockNumber
+          },
+          computedHashes: {
+            sha256Hash: hashData.sha256Hash,
+            cidHash: hashData.cidHash,
+            ipfsHash: hashData.ipfsHash
+          }
         },
-        computedHashes: {
-          sha256Hash,
-          cidHash,
-          ipfsHash
-        }
+        timestamp: new Date().toISOString()
       });
     } catch (dbError) {
       console.error(`[${uploadId}] Database sync failed:`, dbError);
+
+      // Even with DB failure, certificate is on blockchain, so return success with warning
       return res.status(201).json({
-        status: 'UPLOADED_WITH_WARNING',
+        success: true,
+        status: 'SUCCESS_WITH_WARNING',
         message: 'Certificate uploaded but database sync failed',
-        certificateId,
-        verificationUrl: `/api/certificates/${certificateId}/verify`,
-        ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/${ipfsHash}`,
-        transaction: {
-          hash: tx.transactionHash,
-          block: tx.blockNumber
+        data: {
+          certificateId,
+          verificationUrl: `/api/certificates/${certificateId}/verify`,
+          ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/ipfs/${hashData.ipfsHash}`,
+          transaction: {
+            hash: tx.transactionHash,
+            block: tx.blockNumber
+          },
+          computedHashes: {
+            sha256Hash: hashData.sha256Hash,
+            cidHash: hashData.cidHash,
+            ipfsHash: hashData.ipfsHash
+          }
         },
         warning: 'Certificate exists on blockchain but may not be retrievable from database',
-        dbError: process.env.NODE_ENV === 'development' ? dbError.message : 'Database sync failed',
-        computedHashes: {
-          sha256Hash,
-          cidHash,
-          ipfsHash
-        }
+        warningDetails: process.env.NODE_ENV === 'development' ? dbError.message : 'Database sync failed',
+        timestamp: new Date().toISOString()
       });
     }
 
   } catch (error) {
-    console.error(`[${uploadId}] Upload Error:`, error);
-    res.status(500).json({
+    console.error(`[${uploadId}] Unhandled upload error:`, error);
+    console.error(`[${uploadId}] Error stack:`, error.stack);
+
+    return res.status(500).json({
+      success: false,
+      status: 'ERROR',
       code: 'UPLOAD_FAILED',
       message: 'Failed to store external certificate',
-      uploadId,
-      details: error.message
+      requestId: uploadId,
+      details: process.env.NODE_ENV === 'development' ? {
+        error: error.message,
+        stack: error.stack
+      } : undefined,
+      timestamp: new Date().toISOString()
     });
   }
 };
@@ -670,137 +731,105 @@ export const uploadExternalCertificate = async (req, res) => {
 export const verifyCertificateById = async (req, res) => {
   const { certificateId } = req.params;
   const verificationId = crypto.randomBytes(4).toString('hex');
-  let certificateData = null;
-  let isValid = false;
+
+  console.log(`[${verificationId}] Verifying certificate by ID: ${certificateId}`);
 
   try {
-    // 1. Validate ID format
-    if (!/^[a-f0-9]{64}$/i.test(certificateId)) {
-      return res.status(400).json({
-        code: 'INVALID_ID',
-        message: 'Invalid certificate ID format',
-        certificateId,
-        verificationId
-      });
+    // First check if we have the certificate in our database
+    const certificate = await Certificate.findOne({ certificateId });
+
+    if (certificate) {
+      console.log(`[${verificationId}] Certificate found in database: ${certificate._id}`);
+
+      // Verify on blockchain
+      try {
+        const blockchainData = await contract.methods.getCertificate(certificateId).call();
+        console.log(`[${verificationId}] Blockchain data:`, blockchainData);
+
+        // Parse the blockchain data
+        const parsedData = parseCertificateData(blockchainData);
+
+        return res.json({
+          status: 'VALID',
+          certificate: {
+            uid: certificate.uid,
+            candidateName: certificate.candidateName,
+            courseName: certificate.courseName,
+            orgName: certificate.orgName,
+            ipfsHash: certificate.ipfsHash,
+            timestamp: parsedData.timestamp,
+            revoked: parsedData.revoked
+          },
+          verificationId,
+          _links: {
+            pdf: `https://gateway.pinata.cloud/ipfs/${certificate.ipfsHash}`,
+            blockchain: `${BLOCK_EXPLORER_URL}/tx/${certificate.blockchainTx}`
+          }
+        });
+      } catch (blockchainError) {
+        console.error(`[${verificationId}] Blockchain verification failed:`, blockchainError);
+
+        // Still return the certificate but with a warning
+        return res.status(200).json({
+          status: 'VALID_WITH_WARNING',
+          certificate: {
+            uid: certificate.uid,
+            candidateName: certificate.candidateName,
+            courseName: certificate.courseName,
+            orgName: certificate.orgName,
+            ipfsHash: certificate.ipfsHash
+          },
+          verificationId,
+          warning: 'Certificate found in database but blockchain verification failed',
+          blockchainError: blockchainError.message,
+          _links: {
+            pdf: `https://gateway.pinata.cloud/ipfs/${certificate.ipfsHash}`
+          }
+        });
+      }
     }
 
-    // 2. Get blockchain data
+    // If not in database, try to verify directly on blockchain
+    console.log(`[${verificationId}] Certificate not found in database, checking blockchain`);
+
     try {
-      [isValid, certificateData] = await Promise.all([
-        contract.methods.isVerified(certificateId).call(),
-        contract.methods.getCertificate(certificateId).call()
-      ]);
-    } catch (blockchainError) {
-      const { statusCode, error } = blockchainErrorHandler(blockchainError, certificateId);
-      return res.status(statusCode).json({
-        error,
-        verificationId
-      });
-    }
+      const blockchainData = await contract.methods.getCertificate(certificateId).call();
+      console.log(`[${verificationId}] Certificate found on blockchain:`, blockchainData);
 
-    // 3. Handle invalid certificate
-    if (!isValid) {
-      return res.status(404).json({
-        code: 'CERTIFICATE_INVALID',
-        message: 'Certificate not found or revoked',
-        certificateId,
-        verificationId
-      });
-    }
+      // Parse the blockchain data
+      const parsedData = parseCertificateData(blockchainData);
 
-    // 4. Enhanced parser with timestamp safety
-    const parseCertificate = (data) => {
-      // Handle numeric indexes first
-      if (typeof data === 'object' && data !== null && '0' in data) {
-        return {
-          uid: data[0] || data._uid,
-          candidateName: data[1] || data._candidate_name,
-          courseName: data[2] || data._course_name,
-          orgName: data[3] || data._org_name,
-          ipfsHash: data[4] || data._ipfs_hash,
-          // Add fallback for timestamp at different positions
-          timestamp: data[5] || data.blockNumber || data._timestamp || Date.now(),
-          revoked: data[6] || data._revoked || false
-        };
-      }
-
-      // Handle named properties
-      return {
-        uid: data.uid || data._uid,
-        candidateName: data.candidateName || data._candidate_name,
-        courseName: data.courseName || data._course_name,
-        orgName: data.orgName || data._org_name,
-        ipfsHash: data.ipfsHash || data._ipfs_hash,
-        timestamp: data.timestamp || data.blockNumber || data._timestamp || Date.now(),
-        revoked: data.revoked || data._revoked || false
-      };
-    };
-
-    // 5. Parse data with safety checks
-    const parsed = parseCertificate(certificateData);
-
-    // 6. Validate required fields
-    if (!parsed.uid || !parsed.candidateName || !parsed.ipfsHash) {
-      return res.status(500).json({
-        code: 'INCOMPLETE_DATA',
-        message: 'Certificate data missing critical fields',
-        certificateId,
+      return res.json({
+        status: 'VALID',
+        certificate: parsedData,
         verificationId,
-        presentFields: {
-          uid: !!parsed.uid,
-          candidateName: !!parsed.candidateName,
-          ipfsHash: !!parsed.ipfsHash
+        warning: 'Certificate verified on blockchain but not found in database',
+        _links: {
+          pdf: `https://gateway.pinata.cloud/ipfs/${parsedData.ipfsHash}`
         }
       });
+    } catch (blockchainError) {
+      console.error(`[${verificationId}] Blockchain verification failed:`, blockchainError);
+
+      return res.status(404).json({
+        status: 'INVALID',
+        code: 'CERTIFICATE_NOT_FOUND',
+        message: 'Certificate not found in database or blockchain',
+        verificationId,
+        certificateId
+      });
     }
-
-    // 7. Validate CID
-    CID.parse(parsed.ipfsHash.trim());
-
-    // 8. Safely handle timestamp conversion
-    const safeTimestamp = parsed.timestamp ? parsed.timestamp.toString() : Date.now().toString();
-
-    // 9. Return validated response
-    res.json({
-      status: 'VALID',
-      certificate: {
-        uid: parsed.uid,
-        candidateName: parsed.candidateName,
-        courseName: parsed.courseName,
-        orgName: parsed.orgName,
-        ipfsHash: parsed.ipfsHash,
-        timestamp: safeTimestamp,
-        revoked: Boolean(parsed.revoked)
-      },
-      verificationId,
-      _links: {
-        pdf: `${PINATA_GATEWAY_BASE_URL}/${parsed.ipfsHash}`,
-        blockchain: `${BLOCK_EXPLORER_URL}/tx/${certificateId}`
-      }
-    });
-
   } catch (error) {
-    console.error(`[${verificationId}] Verification Failed:`, error);
+    console.error(`[${verificationId}] Verification error:`, error);
 
-    // const safeTimestamp = parsed.timestamp ? parsed.timestamp.toString() : Date.now().toString();
-
-    const response = {
+    return res.status(500).json({
+      status: 'ERROR',
       code: 'VERIFICATION_FAILED',
-      message: 'Certificate verification process failed',
-      certificateId,
+      message: 'Failed to verify certificate',
       verificationId,
-      details: error.message,
-      // timestamp: safeTimestamp,
-      // issueDate: new Date(Number(safeTimestamp)).toISOString(),
-      ...(process.env.NODE_ENV === 'development' && {
-        debug: {
-          rawData: certificateData,
-          errorStack: error.stack
-        }
-      })
-    };
-
-    res.status(500).json(response);
+      certificateId,
+      details: error.message
+    });
   }
 };
 
@@ -809,21 +838,25 @@ export const verifyCertificatePdf = async (req, res) => {
 
   try {
     if (!req.file) {
-      return res.status(400).json({
-        code: 'MISSING_FILE',
-        message: 'No PDF file uploaded',
+      console.log(`[${verificationId}] No file uploaded for verification`);
+      const { response, statusCode } = errorResponse(
+        'MISSING_REQUIRED_FIELD',
+        'No PDF file uploaded',
+        null,
         verificationId
-      });
+      );
+      return res.status(statusCode).json(response);
     }
 
-    // Get file info
+    // Get file info for logging
     const fileInfo = {
       originalName: req.file.originalname,
       mimeType: req.file.mimetype,
-      size: req.file.size
+      size: req.file.size,
+      fieldname: req.file.fieldname
     };
 
-    console.log(`[${verificationId}] Verifying PDF: ${fileInfo.originalName} (${fileInfo.size} bytes)`);
+    console.log(`[${verificationId}] Verifying PDF: ${fileInfo.originalName} (${fileInfo.size} bytes), field: ${fileInfo.fieldname}`);
 
     // Compute hash of the uploaded PDF
     const pdfBuffer = req.file.buffer;
@@ -832,161 +865,68 @@ export const verifyCertificatePdf = async (req, res) => {
     console.log(`[${verificationId}] Computed SHA-256 hash: ${sha256Hash}`);
     console.log(`[${verificationId}] Computed CID hash: ${cidHash}`);
 
-    // Get all certificates from the database for comparison
-    const allCertificates = await Certificate.find({});
-    console.log(`[${verificationId}] Found ${allCertificates.length} certificates in database`);
+    // Find certificate using various match attempts
+    let certificate = await findCertificateByHash(sha256Hash, cidHash);
+    let matchType = 'exact_match';
 
-    // Log all stored hashes for debugging
-    console.log(`[${verificationId}] All stored certificates:`, allCertificates.map(cert => ({
-      certificateId: cert.certificateId,
-      sha256Hash: cert.sha256Hash,
-      cidHash: cert.cidHash,
-      ipfsHash: cert.ipfsHash
-    })));
-
-    // Try to find certificate in database by SHA-256 hash
-    let certificate = await Certificate.findOne({ sha256Hash: sha256Hash });
-    let matchType = 'exact_sha256';
-    console.log(`[${verificationId}] SHA-256 match:`, certificate ? 'Found' : 'Not found');
-
-    // If not found by SHA-256, try to find by CID hash
-    if (!certificate && cidHash) {
-      console.log(`[${verificationId}] No match found with SHA-256 hash, trying CID hash`);
-      certificate = await Certificate.findOne({ cidHash: cidHash });
-      if (certificate) {
-        matchType = 'exact_cid';
-        console.log(`[${verificationId}] CID match found`);
-      }
-    }
-
-    // If still not found, try to find by IPFS hash
     if (!certificate) {
-      console.log(`[${verificationId}] No match found with computed hashes, trying IPFS hash`);
-      certificate = await Certificate.findOne({ ipfsHash: sha256Hash });
-      if (certificate) {
-        matchType = 'exact_ipfs';
-        console.log(`[${verificationId}] IPFS match found`);
+      console.log(`[${verificationId}] No exact match found, trying partial matches`);
+      const result = await findCertificateByAnyHash(sha256Hash, cidHash);
+      if (result) {
+        certificate = result.certificate;
+        matchType = result.matchType;
       }
     }
 
-    // If still not found, try to find by certificateId
     if (!certificate) {
-      console.log(`[${verificationId}] No match found with hashes, trying certificateId`);
-      if (/^[a-f0-9]{64}$/i.test(sha256Hash)) {
-        certificate = await Certificate.findOne({ certificateId: sha256Hash });
-        if (certificate) {
-          matchType = 'certificate_id';
-          console.log(`[${verificationId}] Certificate ID match found`);
-        }
-      }
-    }
-
-    // If still not found, try partial match
-    if (!certificate) {
-      console.log(`[${verificationId}] No exact match found, trying partial match`);
-
-      for (const cert of allCertificates) {
-        // Check if the computed hash is contained in any of the certificate's hash fields
-        if (cert.sha256Hash && (cert.sha256Hash.includes(sha256Hash) || sha256Hash.includes(cert.sha256Hash))) {
-          console.log(`[${verificationId}] Found partial match with SHA-256 hash: ${cert.certificateId}`);
-          certificate = cert;
-          matchType = 'partial_sha256';
-          break;
-        }
-
-        if (cert.cidHash && cidHash && (cert.cidHash.includes(cidHash) || cidHash.includes(cert.cidHash))) {
-          console.log(`[${verificationId}] Found partial match with CID hash: ${cert.certificateId}`);
-          certificate = cert;
-          matchType = 'partial_cid';
-          break;
-        }
-
-        if (cert.ipfsHash && (cert.ipfsHash.includes(sha256Hash) || sha256Hash.includes(cert.ipfsHash))) {
-          console.log(`[${verificationId}] Found partial match with IPFS hash: ${cert.certificateId}`);
-          certificate = cert;
-          matchType = 'partial_ipfs';
-          break;
-        }
-
-        if (cert.ipfsHash && cidHash && (cert.ipfsHash.includes(cidHash) || cidHash.includes(cert.ipfsHash))) {
-          console.log(`[${verificationId}] Found partial match with IPFS hash and CID: ${cert.certificateId}`);
-          certificate = cert;
-          matchType = 'partial_ipfs_cid';
-          break;
-        }
-      }
-    }
-
-    if (certificate) {
-      console.log(`[${verificationId}] Certificate found: ${certificate.certificateId} (Match type: ${matchType})`);
-
-      // Verify on blockchain
-      console.log(`[${verificationId}] Verifying on blockchain...`);
-      const [isValid, blockchainData] = await Promise.all([
-        contract.methods.isVerified(certificate.certificateId).call(),
-        contract.methods.getCertificate(certificate.certificateId).call()
-      ]);
-
-      if (!isValid) {
-        console.log(`[${verificationId}] Certificate found in database but invalid on blockchain`);
-        return res.status(400).json({
-          code: 'CERTIFICATE_INVALID',
-          message: 'Certificate exists but is not valid on blockchain',
-          verificationId,
+      const { response, statusCode } = errorResponse(
+        'CERTIFICATE_NOT_FOUND',
+        'Certificate not found in our records',
+        {
           computedHash: sha256Hash,
-          cidHash,
-          certificateId: certificate.certificateId
-        });
-      }
-
-      // Parse blockchain data
-      const parsedData = parseCertificateData(blockchainData);
-      console.log(`[${verificationId}] Blockchain verification successful`);
-
-      // Return success response with both database and blockchain data
-      return res.json({
-        status: 'VALID',
-        certificate: {
-          id: certificate._id,
-          certificateId: certificate.certificateId,
-          candidateName: certificate.candidateName,
-          courseName: certificate.courseName,
-          orgName: certificate.orgName,
-          issuedAt: certificate.createdAt,
-          source: certificate.source,
-          blockchainData: parsedData
+          cidHash
         },
-        verificationId,
+        verificationId
+      );
+      return res.status(statusCode).json(response);
+    }
+
+    // Verification successful, determine status
+    const status = certificate.revoked ? 'REVOKED' : 'VALID';
+
+    // Return standardized verification response
+    return res.json(verificationResponse(
+      status,
+      {
+        certificateId: certificate.certificateId,
+        candidateName: certificate.candidateName,
+        courseName: certificate.courseName,
+        orgName: certificate.orgName,
+        issuedAt: certificate.createdAt,
+        ipfsHash: certificate.ipfsHash,
+        shortCode: certificate.shortCode
+      },
+      verificationId,
+      {
+        verification: `/api/certificates/${certificate.certificateId}/verify`,
+        pdf: `/api/certificates/${certificate.certificateId}/pdf`,
+        blockchain: `/api/certificates/${certificate.certificateId}/blockchain`
+      },
+      {
         computedHash: sha256Hash,
         cidHash,
-        matchType,
-        blockchainValid: true,
-        _links: {
-          verification: `/api/certificates/${certificate.certificateId}/verify`,
-          pdf: `/api/certificates/${certificate.certificateId}/pdf`,
-          blockchain: `/api/certificates/${certificate.certificateId}/blockchain`
-        }
-      });
-    } else {
-      console.log(`[${verificationId}] No matching certificate found`);
-
-      // Return not found response
-      return res.status(404).json({
-        code: 'CERTIFICATE_NOT_FOUND',
-        message: 'No matching certificate found',
-        verificationId,
-        computedHash: sha256Hash,
-        cidHash
-      });
-    }
+        matchType
+      }
+    ));
   } catch (error) {
-    console.error(`[${verificationId}] Verification Error:`, error);
-    return res.status(500).json({
-      code: 'VERIFICATION_FAILED',
-      message: 'Failed to verify certificate',
-      verificationId,
-      details: error.message
-    });
+    console.error(`[${verificationId}] PDF Verification Error:`, error);
+    const { response, statusCode } = errorResponse(
+      'VERIFICATION_FAILED',
+      'Failed to verify certificate PDF',
+      { errorDetails: error.message },
+      verificationId
+    );
+    return res.status(statusCode).json(response);
   }
 };
 
@@ -995,11 +935,13 @@ export const debugPdfVerification = async (req, res) => {
 
   try {
     if (!req.file) {
-      return res.status(400).json({
-        code: 'MISSING_FILE',
-        message: 'No PDF file uploaded',
+      const { response, statusCode } = errorResponse(
+        'MISSING_REQUIRED_FIELD',
+        'No PDF file uploaded',
+        null,
         debugId
-      });
+      );
+      return res.status(statusCode).json(response);
     }
 
     // Get file info
@@ -1120,55 +1062,24 @@ export const debugPdfVerification = async (req, res) => {
     }
 
     // Return debug information
-    return res.json({
-      debugId,
-      fileInfo: {
-        name: fileInfo.originalName,
-        size: fileInfo.size,
-        type: fileInfo.mimeType
-      },
-      computedHashes: {
+    return res.status(200).json(successResponse({
+      fileInfo,
+      hashes: {
         sha256Hash,
         cidHash
       },
-      verification: {
-        status: matches.length > 0 ? 'MATCH_FOUND' : 'NO_MATCH',
-        totalCertificates: allCertificates.length,
-        matches: matches.length > 0 ? matches : 'No matches found',
-        matchTypes: matches.map(m => m.matchType)
-      },
-      database: {
-        totalCertificates: allCertificates.length,
-        // certificates: allCertificates.map(cert => ({
-        //   id: cert.certificateId,
-        //   hashes: {
-        //     sha256: cert.sha256Hash,
-        //     cid: cert.cidHash,
-        //     ipfs: cert.ipfsHash
-        //   },
-        //   source: cert.source,
-        //   createdAt: cert.createdAt
-        // }))
-      },
-      blockchain: {
-        status: 'NOT_CHECKED',
-        note: 'Use /api/certificates/{id}/verify for blockchain verification'
-      },
-      _links: {
-        verification: `/api/certificates/verify/pdf`,
-        debug: `/api/certificates/debug/pdf`,
-        blockchain: matches.length > 0 ? `/api/certificates/${matches[0].certificateId}/blockchain` : null
-      }
-    });
+      matches
+    }, 'PDF verification debug information', 200));
+
   } catch (error) {
     console.error(`[${debugId}] Debug Error:`, error);
-    return res.status(500).json({
-      code: 'DEBUG_FAILED',
-      message: 'Failed to debug PDF verification',
-      debugId,
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
+    const { response, statusCode } = errorResponse(
+      'INTERNAL_ERROR',
+      'Failed to process PDF for debugging',
+      { errorDetails: error.message },
+      debugId
+    );
+    return res.status(statusCode).json(response);
   }
 };
 
@@ -1180,13 +1091,16 @@ export const getCertificatePDF = async (req, res) => {
   try {
     // 1. Validate certificate ID format
     if (!/^[a-f0-9]{64}$/i.test(certificateId)) {
-      return res.status(400).json({
-        code: 'INVALID_ID',
-        message: 'Certificate ID must be 64-character hexadecimal string',
-        certificateId,
-        requestId,
-        example: '817759607228da54a922e4160f9d1b8f646e02360fc0f08372063510e87a45d6'
-      });
+      const { response, statusCode } = errorResponse(
+        'INVALID_FORMAT',
+        'Certificate ID must be 64-character hexadecimal string',
+        {
+          certificateId,
+          example: '817759607228da54a922e4160f9d1b8f646e02360fc0f08372063510e87a45d6'
+        },
+        requestId
+      );
+      return res.status(statusCode).json(response);
     }
 
     // 2. Fetch certificate data from blockchain
@@ -1194,21 +1108,24 @@ export const getCertificatePDF = async (req, res) => {
 
     // 3. Extract IPFS hash with multiple fallbacks
     const ipfsHash = (
-      certificateData[4] ||                  // Array position
-      certificateData.ipfsHash ||            // Named property
-      certificateData._ipfs_hash ||          // Alternative naming
-      certificateData.ipfs                   // Common abbreviation
+      certificateData[4] ||
+      certificateData.ipfsHash ||
+      certificateData._ipfs_hash ||
+      certificateData.ipfs
     )?.trim();
 
     // 4. Validate CID existence
     if (!ipfsHash) {
-      return res.status(404).json({
-        code: 'MISSING_CID',
-        message: 'No IPFS hash associated with certificate',
-        certificateId,
-        requestId,
-        resolution: 'Regenerate certificate with valid PDF upload'
-      });
+      const { response, statusCode } = errorResponse(
+        'NOT_FOUND',
+        'No IPFS hash associated with certificate',
+        {
+          certificateId,
+          resolution: 'Regenerate certificate with valid PDF upload'
+        },
+        requestId
+      );
+      return res.status(statusCode).json(response);
     }
 
     // 5. Strict CID validation
@@ -1220,14 +1137,17 @@ export const getCertificatePDF = async (req, res) => {
         type: cid.type
       });
     } catch (e) {
-      return res.status(400).json({
-        code: 'INVALID_CID',
-        message: 'Malformed IPFS Content Identifier',
-        certificateId,
-        ipfsHash,
-        requestId,
-        documentation: 'https://docs.ipfs.tech/concepts/content-addressing/'
-      });
+      const { response, statusCode } = errorResponse(
+        'INVALID_FORMAT',
+        'Malformed IPFS Content Identifier',
+        {
+          certificateId,
+          ipfsHash,
+          documentation: 'https://docs.ipfs.tech/concepts/content-addressing/'
+        },
+        requestId
+      );
+      return res.status(statusCode).json(response);
     }
 
     // 6. Permanent redirect with security headers
@@ -1243,22 +1163,18 @@ export const getCertificatePDF = async (req, res) => {
       .redirect(301, pdfUrl); // Permanent redirect
 
   } catch (error) {
-    // Enhanced error classification
-    const errorType = error.message.includes('revert') ? 'BLOCKCHAIN_ERROR' :
-      error.message.includes('invalid arrayify') ? 'INVALID_INPUT' :
-        'SERVER_ERROR';
-
-    res.status(500).json({
-      code: 'PDF_RETRIEVAL_FAILED',
-      type: errorType,
-      message: 'Failed to retrieve PDF certificate',
-      certificateId,
-      requestId,
-      details: error.message,
-      ...(process.env.NODE_ENV === 'development' && {
-        stack: error.stack
-      })
-    });
+    console.error(`[${requestId}] PDF Retrieval Error:`, error);
+    const { response, statusCode } = errorResponse(
+      'INTERNAL_ERROR',
+      'Failed to retrieve certificate PDF',
+      {
+        certificateId,
+        errorDetails: process.env.NODE_ENV === 'development' ? error.message : undefined,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      },
+      requestId
+    );
+    return res.status(statusCode).json(response);
   }
 };
 
@@ -1267,51 +1183,67 @@ export const getCertificateMetadata = async (req, res) => {
   const requestId = crypto.randomBytes(4).toString('hex');
 
   try {
+    // Validate certificate ID
     if (!/^[a-f0-9]{64}$/i.test(certificateId)) {
-      return res.status(400).json({
-        code: 'INVALID_ID',
-        message: 'Invalid certificate ID format',
-        certificateId,
+      const { response, statusCode } = errorResponse(
+        'INVALID_FORMAT',
+        'Certificate ID must be 64-character hexadecimal string',
+        {
+          certificateId,
+          example: '817759607228da54a922e4160f9d1b8f646e02360fc0f08372063510e87a45d6'
+        },
         requestId
-      });
+      );
+      return res.status(statusCode).json(response);
     }
 
-    const [exists, blockchainData] = await Promise.all([
-      contract.methods.isVerified(certificateId).call(),
-      contract.methods.getCertificate(certificateId).call()
-    ]);
+    // Find certificate in database
+    const certificate = await Certificate.findOne({ certificateId });
 
-    if (!exists) {
-      return res.status(404).json({
-        code: 'CERTIFICATE_NOT_FOUND',
-        message: 'Certificate does not exist or is revoked',
-        certificateId,
+    if (!certificate) {
+      const { response, statusCode } = errorResponse(
+        'CERTIFICATE_NOT_FOUND',
+        'Certificate not found in database',
+        { certificateId },
         requestId
-      });
+      );
+      return res.status(statusCode).json(response);
     }
 
-    const parsedData = parseCertificateData(blockchainData);
-
-    res.json({
-      status: 'FOUND',
-      certificateId,
-      ...parsedData,
-      timestamp: Number(parsedData.timestamp),
-      verificationStatus: 'VALID',
-      links: {
-        pdf: `${PINATA_GATEWAY_BASE_URL}/${parsedData.ipfsHash}`,
-        blockchain: `${BLOCK_EXPLORER_URL}/tx/${certificateId}`
+    // Return formatted certificate data
+    return res.json(successResponse({
+      certificateId: certificate.certificateId,
+      candidateName: certificate.candidateName,
+      courseName: certificate.courseName,
+      orgName: certificate.orgName,
+      issueDate: certificate.createdAt,
+      hashes: {
+        ipfsHash: certificate.ipfsHash,
+        sha256Hash: certificate.sha256Hash,
+        cidHash: certificate.cidHash
+      },
+      shortCode: certificate.shortCode,
+      status: certificate.revoked ? 'REVOKED' : 'VALID',
+      _links: {
+        verification: `/api/certificates/${certificateId}/verify`,
+        shortCodeVerification: `/api/certificates/code/${certificate.shortCode}`,
+        pdf: `/api/certificates/${certificateId}/pdf`,
+        blockchain: `/api/certificates/${certificateId}/blockchain`
       }
-    });
-
+    }, 'Certificate metadata retrieved successfully'));
   } catch (error) {
-    res.status(500).json({
-      code: 'METADATA_ERROR',
-      message: 'Failed to fetch certificate metadata',
-      certificateId,
-      requestId,
-      details: error.message
-    });
+    console.error(`[${requestId}] Metadata Retrieval Error:`, error);
+    const { response, statusCode } = errorResponse(
+      'INTERNAL_ERROR',
+      'Failed to retrieve certificate metadata',
+      {
+        certificateId,
+        errorDetails: process.env.NODE_ENV === 'development' ? error.message : undefined,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      },
+      requestId
+    );
+    return res.status(statusCode).json(response);
   }
 };
 
@@ -1324,39 +1256,70 @@ export const searchByCID = async (req, res) => {
     const certificate = await findCertificateByAnyHash(cid);
 
     if (!certificate) {
-      return res.status(404).json({
-        code: 'CERTIFICATE_NOT_FOUND',
-        message: 'No certificate found with this identifier',
-        searchValue: cid,
-        requestId,
-        tip: 'Try searching with the IPFS hash (starts with Qm) or the certificate ID'
-      });
+      const { response, statusCode } = errorResponse(
+        'CERTIFICATE_NOT_FOUND',
+        'No certificate found with this identifier',
+        {
+          searchValue: cid,
+          tip: 'Try searching with the IPFS hash (starts with Qm) or the certificate ID'
+        },
+        requestId
+      );
+      return res.status(statusCode).json(response);
     }
 
     // Verify on blockchain
+    let isValid = false;
+    let blockchainError = null;
+
     try {
-      const isValid = await contract.methods.isVerified(certificate.certificateId).call();
-    } catch (blockchainError) {
-      const { statusCode, error } = blockchainErrorHandler(blockchainError, certificate.certificateId);
-      return res.status(statusCode).json({
-        error,
-        searchValue: cid,
-        requestId
-      });
+      isValid = await contract.methods.isVerified(certificate.certificateId).call();
+    } catch (error) {
+      console.error(`[${requestId}] Blockchain verification error:`, error);
+      blockchainError = error.message;
     }
 
+    // Create response based on verification result
+    const status = certificate.revoked ? 'REVOKED' : (isValid ? 'VALID' : 'VALID_WITH_WARNING');
+    const blockchainData = blockchainError ?
+      { blockchainError, errorDetails: blockchainError } :
+      { blockchainVerified: isValid };
+
     // Return formatted response
-    res.json(formatCertificateResponse(certificate));
+    return res.json(verificationResponse(
+      status,
+      {
+        certificateId: certificate.certificateId,
+        candidateName: certificate.candidateName,
+        courseName: certificate.courseName,
+        orgName: certificate.orgName,
+        issuedAt: certificate.createdAt,
+        ipfsHash: certificate.ipfsHash,
+        shortCode: certificate.shortCode,
+        revoked: certificate.revoked || false
+      },
+      requestId,
+      {
+        verification: `/api/certificates/${certificate.certificateId}/verify`,
+        pdf: `https://gateway.pinata.cloud/ipfs/${certificate.ipfsHash}`,
+        blockchain: `http://localhost:8545/tx/${certificate.transactionHash || certificate.certificateId}`
+      },
+      blockchainData
+    ));
 
   } catch (error) {
     console.error(`[${requestId}] Search Error:`, error);
-    res.status(500).json({
-      code: 'SEARCH_ERROR',
-      message: 'Failed to search for certificate',
-      searchValue: cid,
-      requestId,
-      details: error.message
-    });
+    const { response, statusCode } = errorResponse(
+      'INTERNAL_ERROR',
+      'Failed to search for certificate',
+      {
+        searchValue: cid,
+        errorDetails: process.env.NODE_ENV === 'development' ? error.message : undefined,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      },
+      requestId
+    );
+    return res.status(statusCode).json(response);
   }
 };
 

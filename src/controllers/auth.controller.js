@@ -103,8 +103,20 @@ export const login = async (req, res) => {
       return res.status(statusCode).json(response);
     }
 
-    // Find user by email
-    const user = await User.findByEmail(email);
+    // Find user by email with better error handling
+    let user;
+    try {
+      user = await User.findByEmail(email);
+    } catch (dbError) {
+      console.error(`[${requestId}] Database error while finding user:`, dbError);
+      const { response, statusCode } = errorResponse(
+        'DATABASE_ERROR',
+        'Error accessing user database',
+        process.env.NODE_ENV === 'development' ? { error: dbError.message } : {},
+        requestId
+      );
+      return res.status(statusCode).json(response);
+    }
 
     if (!user) {
       console.log(`[${requestId}] No user found with email: ${email}`);
@@ -119,8 +131,20 @@ export const login = async (req, res) => {
 
     console.log(`[${requestId}] User found: ${user._id}`);
 
-    // Check password
-    const isPasswordValid = await user.comparePassword(password);
+    // Check password with better error handling
+    let isPasswordValid = false;
+    try {
+      isPasswordValid = await user.comparePassword(password);
+    } catch (passwordError) {
+      console.error(`[${requestId}] Error comparing passwords:`, passwordError);
+      const { response, statusCode } = errorResponse(
+        'AUTHENTICATION_ERROR',
+        'Error verifying password',
+        process.env.NODE_ENV === 'development' ? { error: passwordError.message } : {},
+        requestId
+      );
+      return res.status(statusCode).json(response);
+    }
 
     if (!isPasswordValid) {
       console.log(`[${requestId}] Invalid password for user: ${user._id}`);
@@ -135,23 +159,41 @@ export const login = async (req, res) => {
 
     console.log(`[${requestId}] Password validation successful`);
 
-    // Generate tokens directly (using the approach from your working code)
-    const token = jwt.sign(
-      { id: user._id, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: '1d' }
-    );
+    // Generate tokens with better error handling
+    let token, refreshToken;
+    try {
+      // Generate access token
+      token = jwt.sign(
+        { id: user._id, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: '1d' }
+      );
 
-    // Generate refresh token directly
-    const refreshToken = jwt.sign(
-      { id: user._id },
-      process.env.JWT_SECRET, // Using same secret for simplicity
-      { expiresIn: '7d' }
-    );
+      // Generate refresh token
+      refreshToken = jwt.sign(
+        { id: user._id },
+        process.env.JWT_SECRET, // Using same secret for simplicity
+        { expiresIn: '7d' }
+      );
+    } catch (tokenError) {
+      console.error(`[${requestId}] Error generating tokens:`, tokenError);
+      const { response, statusCode } = errorResponse(
+        'TOKEN_GENERATION_ERROR',
+        'Error generating authentication tokens',
+        process.env.NODE_ENV === 'development' ? { error: tokenError.message } : {},
+        requestId
+      );
+      return res.status(statusCode).json(response);
+    }
 
     // Store refresh token on user
-    user.refreshToken = refreshToken;
-    await user.save();
+    try {
+      user.refreshToken = refreshToken;
+      await user.save();
+    } catch (saveError) {
+      console.error(`[${requestId}] Error saving refresh token:`, saveError);
+      // Continue despite this error, as login can still proceed
+    }
 
     console.log(`[${requestId}] Tokens generated successfully`);
 
@@ -193,10 +235,25 @@ export const login = async (req, res) => {
   } catch (error) {
     console.error(`[${requestId}] Login error:`, error);
 
+    // Determine the type of error for a more specific response
+    let errorCode = 'INTERNAL_ERROR';
+    let errorMessage = 'Login failed due to an internal error';
+
+    if (error.name === 'ValidationError') {
+      errorCode = 'VALIDATION_ERROR';
+      errorMessage = 'Validation failed: ' + (error.message || '');
+    } else if (error.name === 'MongoError' || error.name === 'MongoServerError') {
+      errorCode = 'DATABASE_ERROR';
+      errorMessage = 'Database operation failed';
+    } else if (error.name === 'JsonWebTokenError') {
+      errorCode = 'TOKEN_ERROR';
+      errorMessage = 'Error with authentication token';
+    }
+
     const { response, statusCode } = errorResponse(
-      'INTERNAL_ERROR',
-      'Login failed due to an internal error',
-      process.env.NODE_ENV === 'development' ? { error: error.message } : {},
+      errorCode,
+      errorMessage,
+      process.env.NODE_ENV === 'development' ? { error: error.message, stack: error.stack } : {},
       requestId
     );
     return res.status(statusCode).json(response);

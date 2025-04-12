@@ -13,10 +13,16 @@ const app = express();
 // Middleware
 app.use(cors({
   origin: ['http://localhost:5173', 'http://localhost:5173/', 'http://127.0.0.1:5173/'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  credentials: true
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
-app.use(express.json());
+
+// Increase JSON payload size limit for larger requests
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Logger
 app.use(morgan('dev'));
 
 // Mount API routes

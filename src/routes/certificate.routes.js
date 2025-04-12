@@ -13,7 +13,8 @@ import {
   getCertificateStats,
   getOrgCertificates,
   getCertificatePDF,
-  debugPdfVerification
+  debugPdfVerification,
+  serveCertificatePDF
 } from '../controllers/certificate.controller.js';
 
 // Import from the new verification controller
@@ -52,6 +53,7 @@ router.get('/:certificateId/signature/verify', apiLimiter, verifyInstitutionalSi
 
 // Certificate Retrieval Routes (Public)
 router.get('/:certificateId/pdf', apiLimiter, getCertificatePDF);
+router.get('/:certificateId/view-pdf', apiLimiter, serveCertificatePDF);
 router.get('/:certificateId/metadata', apiLimiter, getCertificateMetadata);
 router.get('/search/cid/:cid', apiLimiter, searchByCID);
 

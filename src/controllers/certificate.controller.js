@@ -349,19 +349,23 @@ export const generateCertificate = async (req, res) => {
     // 7. Database Save
     // ======================
     try {
-      await Certificate.create({
+      const newCertificate = await Certificate.create({
         certificateId,
         shortCode,
         uid,
         candidateName,
         courseName,
         orgName,
+        issuer: req.user.id,
         ipfsHash: ipfsData.ipfsHash,
         sha256Hash: ipfsData.sha256Hash,
         cidHash: ipfsData.cidHash,
         blockchainTx: certificateData.blockchainTx,
-        source: 'internal' // Changed from 'generated' to 'internal'
+        source: 'internal',
+        status: 'PENDING'
       });
+
+      console.log(`[${generationId}] Certificate saved to database with ID: ${newCertificate._id}`);
     } catch (dbError) {
       console.error(`[${generationId}] Database save failed:`, dbError);
       return res.status(500).json({
@@ -1346,6 +1350,94 @@ export const verifyInstitutionalSignature = async (req, res) => {
       certificateId,
       details: error.message,
       stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+};
+
+/**
+ * Simplified PDF serving function that primarily redirects to IPFS
+ * Still handles download vs. view options
+ */
+export const serveCertificatePDF = async (req, res) => {
+  const { certificateId } = req.params;
+  const requestId = crypto.randomBytes(4).toString('hex');
+  const isDownload = req.query.download === 'true';
+
+  console.log(`[${requestId}] PDF request for ${certificateId}, download=${isDownload}`);
+
+  try {
+    // Validate the certificate ID
+    if (!/^[a-f0-9]{64}$/i.test(certificateId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid certificate ID format',
+        details: 'Certificate ID must be a 64-character hexadecimal string'
+      });
+    }
+
+    // Find the certificate in the database
+    const certificate = await Certificate.findOne({ certificateId });
+    if (!certificate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Certificate not found',
+        certificateId
+      });
+    }
+
+    if (!certificate.ipfsHash) {
+      return res.status(404).json({
+        success: false,
+        message: 'Certificate has no associated PDF',
+        certificateId
+      });
+    }
+
+    // Create direct IPFS URL
+    const ipfsUrl = `${PINATA_GATEWAY_BASE_URL}/${certificate.ipfsHash}`;
+    console.log(`[${requestId}] Redirecting to IPFS: ${ipfsUrl}`);
+
+    if (isDownload) {
+      // For downloads, provide a filename suggestion using Content-Disposition
+      const filename = `certificate-${certificate.shortCode || certificate.certificateId.substring(0, 8)}.pdf`;
+
+      // Simple HTML that automatically triggers download
+      return res.set({
+        'Content-Type': 'text/html',
+        'Cache-Control': 'no-cache'
+      }).send(`
+        <html>
+          <head>
+            <title>Downloading Certificate</title>
+            <script>
+              window.onload = function() {
+                const link = document.createElement('a');
+                link.href = "${ipfsUrl}";
+                link.download = "${filename}";
+                document.body.appendChild(link);
+                link.click();
+                setTimeout(function() {
+                  window.close();
+                }, 1000);
+              }
+            </script>
+          </head>
+          <body>
+            <p>Your download should start automatically. If not, <a href="${ipfsUrl}" download="${filename}">click here</a>.</p>
+          </body>
+        </html>
+      `);
+    } else {
+      // For viewing, just redirect to the IPFS gateway
+      return res.redirect(ipfsUrl);
+    }
+
+  } catch (error) {
+    console.error(`[${requestId}] Error serving PDF:`, error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to serve certificate PDF',
+      details: error.message
     });
   }
 };

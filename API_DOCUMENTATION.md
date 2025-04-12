@@ -383,7 +383,82 @@ GET /certificates/:certificateId/pdf
 **Response:**
 The actual PDF file of the certificate.
 
-#### 2.7 Get Certificate Metadata
+#### 2.7 View Certificate PDF
+
+View or download the PDF certificate directly from IPFS.
+
+```http
+GET /certificates/:certificateId/view-pdf
+```
+
+**Purpose:**
+This endpoint provides direct access to certificate PDFs stored on IPFS. It supports both viewing the PDF in a browser and downloading it with a meaningful filename.
+
+**Route Parameters:**
+
+- `certificateId` (string): The 64-character hexadecimal certificate ID
+
+**Query Parameters:**
+
+- `download` (boolean): Set to 'true' to download the file, otherwise it will be viewed in the browser
+
+**Behavior:**
+
+- **View Mode** (default): Redirects the user's browser directly to the IPFS gateway URL where the PDF can be viewed
+- **Download Mode** (`download=true`): Serves a small HTML page that automatically triggers a download with a proper filename
+
+**Technical Details:**
+
+- The endpoint verifies the certificate exists in the database
+- It checks that the certificate has an associated IPFS hash
+- No proxying is performed; content is served directly from IPFS
+- Filename for downloads: `certificate-{shortCode or first 8 chars of certificateId}.pdf`
+
+**Response (View Mode):**
+
+- A 302 redirect to the IPFS gateway URL
+
+**Response (Download Mode):**
+
+- A HTML page that automatically triggers a download of the PDF file with an appropriate filename
+- Content-Type: text/html
+- Cache-Control: no-cache
+
+**Error Responses:**
+
+```json
+{
+  "success": false,
+  "message": "Invalid certificate ID format",
+  "details": "Certificate ID must be a 64-character hexadecimal string"
+}
+```
+
+```json
+{
+  "success": false,
+  "message": "Certificate not found",
+  "certificateId": "8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1"
+}
+```
+
+```json
+{
+  "success": false,
+  "message": "Certificate has no associated PDF",
+  "certificateId": "8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1"
+}
+```
+
+```json
+{
+  "success": false,
+  "message": "Failed to serve certificate PDF",
+  "details": "Error message details"
+}
+```
+
+#### 2.8 Get Certificate Metadata
 
 Retrieve metadata about a certificate.
 
@@ -422,7 +497,7 @@ GET /certificates/:certificateId/metadata
 }
 ```
 
-#### 2.8 Search Certificate by CID/Hash
+#### 2.9 Search Certificate by CID/Hash
 
 Search for a certificate using any associated hash (IPFS, CID, SHA-256).
 
@@ -433,7 +508,7 @@ GET /certificates/search/cid/:cid
 **Response:**
 Same format as the verification response.
 
-#### 2.9 Get Certificate Statistics (Protected)
+#### 2.10 Get Certificate Statistics (Protected)
 
 Get statistics about certificates issued.
 
@@ -470,7 +545,7 @@ Authorization: Bearer <token>
 }
 ```
 
-#### 2.10 Get Organization Certificates (Protected)
+#### 2.11 Get Organization Certificates (Protected)
 
 Get all certificates issued by a specific organization.
 

@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { successResponse } from '../utils/responseUtils.js';
 import { errorResponse, ErrorCodes } from '../utils/errorUtils.js';
 import crypto from 'crypto';
+import { generateKeyPair, deriveWalletAddress } from '../utils/cryptoUtils.js';
 
 dotenv.config();
 
@@ -37,8 +38,36 @@ export const register = async (req, res) => {
       return res.status(statusCode).json(response);
     }
 
+    // Create user object with base fields
+    const userFields = { name, email, password, role };
+
+    // Generate cryptographic keys if user is an Institute
+    if (role.toUpperCase() === 'INSTITUTE') {
+      try {
+        console.log(`[${requestId}] Generating cryptographic keys for institute: ${email}`);
+        const { publicKey, privateKey } = generateKeyPair();
+        const walletAddress = deriveWalletAddress(publicKey);
+
+        // Add cryptographic fields to user
+        userFields.publicKey = publicKey;
+        userFields.privateKey = privateKey;
+        userFields.walletAddress = walletAddress;
+
+        console.log(`[${requestId}] Cryptographic keys generated successfully:`);
+        console.log(`[${requestId}] - Wallet address: ${walletAddress}`);
+        console.log(`[${requestId}] - Public key length: ${publicKey.length} chars`);
+        console.log(`[${requestId}] - Private key length: ${privateKey.length} chars`);
+      } catch (keyError) {
+        console.error(`[${requestId}] Error generating keys:`, keyError);
+        // Continue with registration without keys if generation fails
+      }
+    }
+
+    // Ensure role is uppercase for consistency
+    userFields.role = role.toUpperCase();
+
     // Create new user
-    const user = new User({ name, email, password, role });
+    const user = new User(userFields);
     await user.save();
     console.log(`[${requestId}] New user created with ID: ${user._id}`);
 
@@ -60,13 +89,21 @@ export const register = async (req, res) => {
     await user.save();
     console.log(`[${requestId}] Tokens generated for new user`);
 
+    // Prepare user data for response (excluding sensitive fields)
+    const userData = {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role
+    };
+
+    // Include wallet address for institutes
+    if (user.role.toUpperCase() === 'INSTITUTE' && user.walletAddress) {
+      userData.walletAddress = user.walletAddress;
+    }
+
     return res.status(201).json(successResponse({
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role
-      },
+      user: userData,
       tokens: {
         access: token,
         refresh: refreshToken
@@ -221,6 +258,11 @@ export const login = async (req, res) => {
       email: user.email,
       role: user.role
     };
+
+    // Include wallet address for institutes
+    if (user.role.toUpperCase() === 'INSTITUTE' && user.walletAddress) {
+      userData.walletAddress = user.walletAddress;
+    }
 
     console.log(`[${requestId}] Login successful for user: ${user._id}`);
 

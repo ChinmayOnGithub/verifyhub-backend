@@ -25,8 +25,37 @@ const UserSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['Institute', 'Verifier'],
+    enum: ['INSTITUTE', 'VERIFIER'],
     required: true
+  },
+  // Cryptographic fields for Institute role
+  publicKey: {
+    type: String,
+    select: true,  // Always include public key
+    trim: true,
+    validate: {
+      validator: function (v) {
+        // Basic validation to make sure the key is at least present
+        return this.role !== 'INSTITUTE' || v;
+      },
+      message: props => 'Public key is required for Institute users'
+    }
+  },
+  privateKey: {
+    type: String,
+    select: true,  // Include private key in queries but filtered in controller
+    trim: true,
+    validate: {
+      validator: function (v) {
+        // Basic validation to make sure the key is at least present
+        return this.role !== 'INSTITUTE' || v;
+      },
+      message: props => 'Private key is required for Institute users'
+    }
+  },
+  walletAddress: {
+    type: String,
+    trim: true
   },
   createdAt: {
     type: Date,
@@ -58,6 +87,7 @@ const UserSchema = new mongoose.Schema({
 
 // Indexes
 UserSchema.index({ role: 1 });
+UserSchema.index({ walletAddress: 1 }, { sparse: true });
 
 // Pre-save hooks
 UserSchema.pre('save', async function (next) {
@@ -131,6 +161,17 @@ UserSchema.methods = {
       console.error('Error generating refresh token:', error);
       throw new Error('Failed to generate refresh token: ' + error.message);
     }
+  },
+
+  // Method to sign data with user's private key
+  signData: async function (data) {
+    if (this.role !== 'INSTITUTE' || !this.privateKey) {
+      throw new Error('Only institutes with private keys can sign data');
+    }
+
+    // Import the cryptoUtils dynamically to avoid circular dependencies
+    const { createDigitalSignature } = await import('../utils/cryptoUtils.js');
+    return createDigitalSignature(data, this.privateKey);
   }
 };
 
@@ -138,6 +179,24 @@ UserSchema.methods = {
 UserSchema.statics = {
   findByEmail: async function (email) {
     return this.findOne({ email }).select('+password +refreshToken');
+  },
+
+  // Get user with cryptographic keys
+  findWithKeys: async function (userId) {
+    return this.findById(userId).select('+publicKey +privateKey');
+  },
+
+  // Verify a signature with a user's public key
+  verifySignature: async function (userId, data, signature) {
+    const user = await this.findById(userId).select('+publicKey');
+
+    if (!user || !user.publicKey) {
+      return false;
+    }
+
+    // Import the cryptoUtils dynamically
+    const { verifyDigitalSignature } = await import('../utils/cryptoUtils.js');
+    return verifyDigitalSignature(data, signature, user.publicKey);
   }
 };
 

@@ -10,6 +10,7 @@ const CertificateSchema = new mongoose.Schema(
     candidateName: { type: String, required: true },
     courseName: { type: String, required: true },
     orgName: { type: String, required: true },
+    issuer: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     ipfsHash: { type: String, required: true },
     sha256Hash: { type: String },
     cidHash: { type: String },
@@ -37,7 +38,8 @@ const CertificateSchema = new mongoose.Schema(
       { cidHash: 1 },
       { blockchainTx: 1 },
       { candidateName: 1 },
-      { orgName: 1 }
+      { orgName: 1 },
+      { issuer: 1 }
     ]
   }
 );

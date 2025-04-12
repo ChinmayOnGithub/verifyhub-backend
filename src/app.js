@@ -3,6 +3,7 @@ import express from 'express';
 import authRoutes from './routes/auth.routes.js';         // Updated path
 import healthRoutes from './routes/health.routes.js';         // Updated path
 import certificateRoutes from './routes/certificate.routes.js'; // Updated path
+import userRoutes from './routes/user.routes.js'; // Added user routes
 import cors from 'cors';
 import morgan from 'morgan';
 import { errorHandler } from './utils/errorUtils.js';
@@ -22,6 +23,7 @@ app.use(morgan('dev'));
 app.use('/api/auth', authRoutes);
 app.use('/api/certificates', certificateRoutes);
 app.use('/api/health', healthRoutes); // Updated this line
+app.use('/api/users', userRoutes); // Added user routes
 
 // Add global error handler (must be after routes)
 app.use(errorHandler);

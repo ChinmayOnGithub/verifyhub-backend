@@ -61,7 +61,20 @@ All API endpoints follow these standardized response formats:
   "message": "Certificate is valid and verified", // Human-readable message
   "verificationId": "7a4f9b2c",
   "certificate": {
-    // Certificate details
+    "referenceId": "STUD2023001",
+    "certificateId": "8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1",
+    "candidateName": "John Doe",
+    "courseName": "Advanced Computer Science",
+    "institutionName": "Tech University",
+    "issuedDate": "2023-06-15T15:30:45.123Z",
+    "generationDate": "2023-06-15T15:30:45.123Z",
+    "blockchainTxId": "0x1d3e...",
+    "cryptographicSignature": "a1b2c3d4e5f6...",
+    "ipfsHash": "QmTQ6ieE6zdfCU2RSHG9DDELAtSACKtrf4C4PpjmGyZnWd",
+    "verificationCode": "ABCD",
+    "revoked": false,
+    "validUntil": "2028-05-15",
+    "isExpired": false
   },
   "_links": {
     // Related resources
@@ -212,55 +225,80 @@ Content-Type: application/json
 
 ### 2. Certificate API
 
-#### 2.1 Generate Certificate (Protected)
+#### 2.1 Generate Certificate
 
-Create and issue a new certificate, storing it on blockchain.
-
-```http
-POST /certificates/generate
-Authorization: Bearer <token>
-Content-Type: application/json
-```
-
-**Request Body:**
+- **URL**: `/certificates/generate`
+- **Method**: `POST`
+- **Auth Required**: Yes
+- **Description**: Generates a certificate for a candidate, uploads it to IPFS, registers on the blockchain, and stores in the database.
+- **Query Parameters**:
+  - `developer` (optional): Set to 'true' to include technical details in the certificate. Default is 'false'.
+- **Request**:
 
 ```json
 {
-  "uid": "PRN123",
-  "candidateName": "Jane Smith",
-  "courseName": "Blockchain Development",
-  "orgName": "Tech University"
+  "candidateName": "John Doe",
+  "courseName": "Blockchain Security",
+  "referenceId": "COURSE123-A",
+  "institutionName": "Blockchain Academy",
+  "cryptographicSignature": "0x8b7e88e8acdb23455b5aa378c8a48be96536736a9c3c12e2b752f0a712cba548",
+  "certificateType": "ACHIEVEMENT",
+  "validUntil": "2025-12-31",
+  "recipientEmail": "john@example.com",
+  "additionalMetadata": {
+    "instructor": "Dr. Jane Smith",
+    "totalHours": 120,
+    "grade": "A+",
+    "credits": 120
+  }
 }
 ```
+
+**Required Parameters:**
+
+- `candidateName` (string): The full name of the certificate recipient
+- `courseName` (string): The name of the course or program completed
+
+**Optional Parameters:**
+
+- `referenceId` (string): An internal reference ID (default: auto-generated)
+- `institutionName` (string): The name of the issuing institution (default: from user profile)
+- `cryptographicSignature` (string): Digital signature of the issuing authority
+- `certificateType` (string): Type of certificate - "ACHIEVEMENT", "COMPLETION", or "PARTICIPATION" (default: "ACHIEVEMENT")
+  - `ACHIEVEMENT`: For outstanding performance or excellence in a course
+  - `COMPLETION`: For successfully completing a course or program
+  - `PARTICIPATION`: For attending or participating in a course or event
+- `validUntil` (string): Expiration date of the certificate (YYYY-MM-DD). Omit this field completely if the certificate does not expire
+- `recipientEmail` (string): Email address of the certificate recipient. If provided, the certificate will be automatically sent to this email.
+- `additionalFields` (object, optional): Any additional data to be included in the certificate
+- `developer` (boolean, optional): Set to 'true' to include technical details in the certificate. Default is 'false'.
 
 **Response:**
 
 ```json
 {
   "success": true,
-  "status": "SUCCESS",
-  "message": "Certificate successfully generated",
-  "data": {
+  "message": "Certificate generated successfully",
+  "certificate": {
+    "referenceId": "STUD2023001",
     "certificateId": "8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1",
-    "shortCode": "XY12",
+    "candidateName": "John Doe",
+    "courseName": "Advanced Computer Science",
+    "institutionName": "Tech University",
+    "issuedDate": "2023-06-15T15:30:45.123Z",
+    "verificationCode": "ABCD",
+    "blockchainTxId": "0x1d3e...",
+    "cryptographicSignature": "a1b2c3d4e5f6...",
     "ipfsHash": "QmTQ6ieE6zdfCU2RSHG9DDELAtSACKtrf4C4PpjmGyZnWd",
-    "sha256Hash": "23f0d3298f57b2ff3f008696b07922526550bb241fd8ea338c50fcd32143e58d",
-    "cidHash": "QmQkwxxoSneaPyWzGcZ3Zr5sXmCEKZeEPGaqLt87DA16DJ",
-    "revoked": false,
-    "timestamp": 1686838245000,
-    "_links": {
-      "verification": "http://localhost:3000/api/certificates/8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1/verify",
-      "shortCodeVerification": "http://localhost:3000/api/certificates/code/XY12",
-      "pdf": "http://localhost:3000/api/certificates/8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1/pdf",
-      "blockchainExplorer": "http://localhost:8545/tx/0x1d3e...",
-      "ipfsGateway": "https://gateway.pinata.cloud/ipfs/QmTQ6ieE6zdfCU2RSHG9DDELAtSACKtrf4C4PpjmGyZnWd"
-    },
-    "transaction": {
-      "hash": "0x1d3e...",
-      "block": "42",
-      "gasUsed": "218468",
-      "networkId": "5777"
+    "emailSent": true,
+    "additionalFields": {
+      "grade": "A+",
+      "credits": 120
     }
+  },
+  "_links": {
+    "pdf": "https://gateway.pinata.cloud/ipfs/QmTQ6ieE6zdfCU2RSHG9DDELAtSACKtrf4C4PpjmGyZnWd",
+    "verify": "https://api.verifyhub.edu/certificates/8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1/verify"
   },
   "timestamp": "2023-06-15T15:30:45.123Z"
 }
@@ -280,7 +318,7 @@ Content-Type: multipart/form-data
 
 - `certificate` (file): PDF certificate file
 - `candidateName` (string): Name of the certificate recipient
-- `orgName` (string): Name of the issuing organization
+- `institutionName` (string): Name of the issuing institution
 - `courseName` (string, optional): Name of the course
 
 **Response:**
@@ -292,7 +330,7 @@ Content-Type: multipart/form-data
   "message": "Certificate uploaded and verified",
   "data": {
     "certificateId": "c1fb2bfc5c5de0bf63f0c44ae0fa1e1e69d32dbb4f3b0cd4fd76876960c4004d",
-    "shortCode": "AB9Z",
+    "verificationCode": "AB9Z",
     "verificationUrl": "/api/certificates/c1fb2bfc5c5de0bf63f0c44ae0fa1e1e69d32dbb4f3b0cd4fd76876960c4004d/verify",
     "ipfsGateway": "https://gateway.pinata.cloud/ipfs/QmW6JqR3fLutt3GiTqES2aqJbbXAHcRtPFUUYQgdgz6Nk7",
     "transaction": {
@@ -311,10 +349,10 @@ Content-Type: multipart/form-data
 
 #### 2.3 Verify Certificate by ID
 
-Verify a certificate's authenticity by its full ID.
+Verify a certificate by its full ID.
 
 ```http
-GET /certificates/:certificateId/verify
+GET /certificates/{certificateId}/verify
 ```
 
 **Response:**
@@ -322,66 +360,164 @@ GET /certificates/:certificateId/verify
 ```json
 {
   "success": true,
-  "status": "VALID",
-  "message": "Certificate is valid and verified",
-  "verificationId": "ab4f29d1",
+  "status": "VERIFIED",
+  "message": "Certificate verified successfully",
+  "verificationId": "ver_6b7a9c2d3e4f5g6h7i8j9k0l",
   "certificate": {
-    "uid": "PRN123",
+    "referenceId": "STUD2023001",
     "certificateId": "8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1",
-    "candidateName": "Jane Smith",
-    "courseName": "Blockchain Development",
-    "orgName": "Tech University",
-    "issuedAt": "2023-06-10T08:15:30.123Z",
+    "candidateName": "John Doe",
+    "courseName": "Advanced Computer Science",
+    "institutionName": "Tech University",
+    "issuedDate": "2023-06-15T15:30:45.123Z",
+    "generationDate": "2023-06-15T15:30:45.123Z",
+    "blockchainTxId": "0x1d3e...",
+    "cryptographicSignature": "a1b2c3d4e5f6...",
     "ipfsHash": "QmTQ6ieE6zdfCU2RSHG9DDELAtSACKtrf4C4PpjmGyZnWd",
-    "shortCode": "XY12",
-    "revoked": false
+    "verificationCode": "ABCD",
+    "revoked": false,
+    "validUntil": "2028-05-15",
+    "isExpired": false
   },
   "_links": {
     "pdf": "https://gateway.pinata.cloud/ipfs/QmTQ6ieE6zdfCU2RSHG9DDELAtSACKtrf4C4PpjmGyZnWd",
-    "blockchain": "http://localhost:8545/tx/0x1d3e..."
+    "blockchain": "https://mumbai.polygonscan.com/tx/0x1d3e..."
   },
   "blockchainVerified": true,
   "timestamp": "2023-06-15T15:30:45.123Z"
 }
 ```
 
-#### 2.4 Verify Certificate by Short Code
+#### 2.4 Bulk Verify Certificates
 
-Verify a certificate using its short verification code.
+Verify multiple certificates in a single request.
 
 ```http
-GET /certificates/code/:shortCode
+POST /certificates/verify/bulk
+```
+
+**Request Body:**
+
+```json
+{
+  "certificateIds": [
+    "8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1",
+    "9672cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e2"
+  ]
+}
 ```
 
 **Response:**
-Same format as the verification by ID response.
 
-#### 2.5 Verify Certificate PDF
+```json
+{
+  "success": true,
+  "totalVerified": 2,
+  "results": [
+    {
+      "certificateId": "8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1",
+      "status": "VERIFIED",
+      "referenceId": "STUD2023001",
+      "candidateName": "John Doe",
+      "courseName": "Advanced Computer Science",
+      "institutionName": "Tech University",
+      "blockchainVerified": true,
+      "verificationCode": "ABCD",
+      "blockchainTxId": "0x1d3e..."
+    },
+    {
+      "certificateId": "9672cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e2",
+      "status": "VERIFIED",
+      "referenceId": "STUD2023002",
+      "candidateName": "Alice Johnson",
+      "courseName": "Cybersecurity",
+      "institutionName": "Tech University",
+      "blockchainVerified": true,
+      "verificationCode": "EFGH",
+      "blockchainTxId": "0x2e4f..."
+    }
+  ],
+  "timestamp": "2023-06-15T15:30:45.123Z"
+}
+```
+
+#### 2.5 Verify Certificate by Verification Code
+
+Verify a certificate using its verification code.
+
+```http
+GET /certificates/code/{verificationCode}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "status": "VERIFIED",
+  "message": "Certificate verified successfully",
+  "verificationId": "ver_8562cb084288d618a070",
+  "certificate": {
+    "certificateId": "8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1",
+    "referenceId": "STUD2023001",
+    "candidateName": "John Doe",
+    "courseName": "Advanced Computer Science",
+    "issuedDate": "2023-05-15T10:30:45.123Z",
+    "institutionName": "Tech University",
+    "institutionLogo": "https://example.com/logo.png",
+    "verificationCode": "ABCD",
+    "cryptographicSignature": "3046022100...",
+    "blockchainLink": "https://etherscan.io/tx/0x1d3e...",
+    "blockchainTxId": "0x1d3e...",
+    "validUntil": "2028-05-15",
+    "isExpired": false
+  },
+  "timestamp": "2023-06-15T15:30:45.123Z"
+}
+```
+
+#### 2.6 Verify Certificate PDF
 
 Verify a certificate by uploading the PDF file.
 
 ```http
 POST /certificates/verify/pdf
-Content-Type: multipart/form-data
 ```
 
-**Form Data:**
+**Request Body:**
 
-- `certificate` (file): PDF certificate file to verify
-
-**Response:**
-Same format as the verification by ID response, with additional hash information.
-
-#### 2.6 Get Certificate PDF
-
-Download the PDF certificate.
-
-```http
-GET /certificates/:certificateId/pdf
+```json
+{
+  "file": "Binary data (PDF file)"
+}
 ```
 
 **Response:**
-The actual PDF file of the certificate.
+
+```json
+{
+  "success": true,
+  "status": "VERIFIED",
+  "message": "Certificate verified successfully",
+  "verificationId": "ver_8562cb084288d618a070",
+  "certificate": {
+    "certificateId": "8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1",
+    "referenceId": "STUD2023001",
+    "candidateName": "John Doe",
+    "courseName": "Advanced Computer Science",
+    "issuedDate": "2023-05-15T10:30:45.123Z",
+    "institutionName": "Tech University",
+    "institutionLogo": "https://example.com/logo.png",
+    "verificationCode": "ABCD",
+    "cryptographicSignature": "3046022100...",
+    "blockchainLink": "https://etherscan.io/tx/0x1d3e...",
+    "blockchainTxId": "0x1d3e...",
+    "validUntil": "2028-05-15",
+    "isExpired": false
+  },
+  "timestamp": "2023-06-15T15:30:45.123Z"
+}
+```
 
 #### 2.7 View Certificate PDF
 
@@ -412,7 +548,7 @@ This endpoint provides direct access to certificate PDFs stored on IPFS. It supp
 - The endpoint verifies the certificate exists in the database
 - It checks that the certificate has an associated IPFS hash
 - No proxying is performed; content is served directly from IPFS
-- Filename for downloads: `certificate-{shortCode or first 8 chars of certificateId}.pdf`
+- Filename for downloads: `certificate-{verificationCode or first 8 chars of certificateId}.pdf`
 
 **Response (View Mode):**
 
@@ -477,18 +613,18 @@ GET /certificates/:certificateId/metadata
     "certificateId": "8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1",
     "candidateName": "Jane Smith",
     "courseName": "Blockchain Development",
-    "orgName": "Tech University",
-    "issueDate": "2023-06-10T08:15:30.123Z",
+    "institutionName": "Tech University",
+    "issuedDate": "2023-10-15T12:00:00.000Z",
     "hashes": {
       "ipfsHash": "QmTQ6ieE6zdfCU2RSHG9DDELAtSACKtrf4C4PpjmGyZnWd",
       "sha256Hash": "23f0d3298f57b2ff3f008696b07922526550bb241fd8ea338c50fcd32143e58d",
       "cidHash": "QmQkwxxoSneaPyWzGcZ3Zr5sXmCEKZeEPGaqLt87DA16DJ"
     },
-    "shortCode": "XY12",
+    "verificationCode": "XY12",
     "status": "VALID",
     "_links": {
       "verification": "/api/certificates/8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1/verify",
-      "shortCodeVerification": "/api/certificates/code/XY12",
+      "verificationCode": "/api/certificates/code/XY12",
       "pdf": "/api/certificates/8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1/pdf",
       "blockchain": "/api/certificates/8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1/blockchain"
     }
@@ -545,12 +681,12 @@ Authorization: Bearer <token>
 }
 ```
 
-#### 2.11 Get Organization Certificates (Protected)
+#### 2.11 Get Institution Certificates (Protected)
 
-Get all certificates issued by a specific organization.
+Get all certificates issued by a specific institution.
 
 ```http
-GET /certificates/organization/:orgName
+GET /certificates/institution/:institutionName
 Authorization: Bearer <token>
 ```
 
@@ -560,17 +696,17 @@ Authorization: Bearer <token>
 {
   "success": true,
   "status": "SUCCESS",
-  "message": "Organization certificates retrieved",
+  "message": "Institution certificates retrieved",
   "data": {
-    "organization": "Tech University",
+    "institution": "Tech University",
     "totalCertificates": 28,
     "certificates": [
       {
         "certificateId": "8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1",
         "candidateName": "Jane Smith",
         "courseName": "Blockchain Development",
-        "issueDate": "2023-06-10T08:15:30.123Z",
-        "shortCode": "XY12",
+        "issuedDate": "2023-10-15T12:00:00.000Z",
+        "verificationCode": "XY12",
         "status": "VALID"
       }
       // Additional certificates...
@@ -586,6 +722,7 @@ Authorization: Bearer <token>
 | -------------------- | ------------------------------------------------------ | ------------ |
 | `VALID`              | Certificate is valid and verified on blockchain        | `true`       |
 | `VALID_WITH_WARNING` | Certificate is valid but with some verification issues | `true`       |
+| `EXPIRED`            | Certificate has passed its expiration date             | `false`      |
 | `INVALID`            | Certificate is invalid                                 | `false`      |
 | `REVOKED`            | Certificate has been revoked by the issuer             | `false`      |
 | `ERROR`              | System error occurred during verification              | `false`      |

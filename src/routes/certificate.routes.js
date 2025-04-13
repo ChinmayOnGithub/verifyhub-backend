@@ -44,9 +44,8 @@ router.get('/:certificateId/verify', apiLimiter, verifyCertificateById);
 router.post('/verify/pdf', apiLimiter, pdfUploadMemory.single('certificate'), verifyCertificatePdf);
 router.post('/debug/pdf', apiLimiter, pdfUploadMemory.single('certificate'), debugPdfVerification);
 
-// New Short Code Verification Route (Public) - Now using the new controller
-router.get('/code/:shortCode', apiLimiter, verifyCertificateByShortCode);
-
+// Certificate Verification Route (Public) - Supports both shortCode and verificationCode
+router.get('/code/:verificationCode', apiLimiter, verifyCertificateByShortCode);
 
 // New Institutional Signature Verification Route (Public) - Now using the new controller
 router.get('/:certificateId/signature/verify', apiLimiter, verifyInstitutionalSignature);
@@ -59,7 +58,9 @@ router.get('/search/cid/:cid', apiLimiter, searchByCID);
 
 // Certificate Management Routes (Protected)
 router.get('/stats', authMiddleware, getCertificateStats);
-router.get('/organization/:orgName', authMiddleware, getOrgCertificates);
+// Support both old and new naming in routes
+router.get('/institution/:institutionName', authMiddleware, getOrgCertificates);
+router.get('/organization/:orgName', authMiddleware, getOrgCertificates); // Keep for backward compatibility
 
 export default router;
 

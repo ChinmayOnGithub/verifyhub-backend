@@ -24,7 +24,7 @@ import crypto from 'crypto';
 import axios from 'axios';
 import { generateCertificatePdf } from '../utils/pdfUtils.js';
 import * as pinata from '../utils/pinata.js';
-import { contract, web3 } from '../utils/blockchain.js';
+import { web3, contract, getWeb3, getContract } from '../utils/blockchain.js';
 import { PINATA_GATEWAY_BASE_URL } from '../constants.js';
 import Certificate from '../models/certificate.model.js';
 // import { extractCertificate } from '../utils/pdfReaderUtils.js';
@@ -50,37 +50,49 @@ import {
 } from '../utils/responseUtils.js';
 import { errorResponse, ErrorCodes } from '../utils/errorUtils.js';
 import { uploadBufferToPinata } from '../utils/pinata.js';
+import { sendCertificateEmail } from '../utils/emailUtils.js';
 
 BigInt.prototype.toJSON = function () { return this.toString(); };
 const BLOCK_EXPLORER_URL = 'http://localhost:8545'
 
 // Helper functions
 const generateCertificateHash = (
-  uid,
+  referenceId,
   candidateName,
   courseName,
-  orgName) => {
-  const normalizedData = `${uid}|${candidateName.trim().toLowerCase()}|${courseName.trim().toLowerCase()}|${orgName.trim().toLowerCase()}`;
+  institutionName,
+  issuedDate = "") => {
+  const normalizedData = `${referenceId}|${candidateName.trim().toLowerCase()}|${courseName.trim().toLowerCase()}|${institutionName.trim().toLowerCase()}|${issuedDate}`;
   return crypto.createHash('sha256').update(normalizedData).digest('hex');
 };
 
 const parseCertificateData = (data) => {
   if (Array.isArray(data)) {
     return {
-      uid: data[0],
+      referenceId: data[0],
       candidateName: data[1],
       courseName: data[2],
-      orgName: data[3],
-      ipfsHash: data[4],
-      timestamp: data[5],
-      revoked: data[6] || false
+      institutionName: data[3],
+      issuedDate: data[4],
+      institutionLogo: data[5],
+      generationDate: data[6],
+      blockchainTxId: data[7],
+      cryptographicSignature: data[8],
+      ipfsHash: data[9],
+      timestamp: data[10],
+      revoked: data[11] || false
     };
   }
   return {
-    uid: data.uid,
+    referenceId: data.referenceId || data.uid,
     candidateName: data.candidateName,
     courseName: data.courseName,
-    orgName: data.orgName,
+    institutionName: data.institutionName || data.orgName,
+    issuedDate: data.issuedDate,
+    institutionLogo: data.institutionLogo || data.collegeLogo,
+    generationDate: data.generationDate,
+    blockchainTxId: data.blockchainTxId || data.transactionId,
+    cryptographicSignature: data.cryptographicSignature || data.digitalSignature,
     ipfsHash: data.ipfsHash,
     timestamp: data.timestamp,
     revoked: data.revoked || false
@@ -116,7 +128,7 @@ const blockchainErrorHandler = (error, certificateId) => {
  */
 const generateVerificationShortCode = () => {
   console.log('[ShortCode] Generating new verification short code');
-  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const characters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let result = '';
 
   // Use crypto for better randomness with rejection sampling for uniform distribution
@@ -185,8 +197,50 @@ export const generateCertificate = async (req, res) => {
   const generationId = crypto.randomBytes(8).toString('hex');
 
   try {
-    const { uid, candidateName, courseName, orgName } = req.body;
-    const metadata = { uid, candidateName, courseName, orgName };
+    const {
+      referenceId,
+      candidateName,
+      courseName,
+      institutionName: requestInstitutionName,
+      issuedDate,
+      institutionLogo: requestInstitutionLogo,
+      validUntil,
+      recipientEmail // Extract recipient email
+    } = req.body;
+
+    // Determine the institution name - use the one provided or the logged-in user's org
+    // This ensures we always have an institutionName whether specified in the request or from the logged-in institute
+    const institutionName = requestInstitutionName || (req.user?.organization || '');
+
+    if (!institutionName) {
+      return res.status(400).json({
+        error: {
+          code: 'MISSING_INSTITUTION',
+          message: 'Institution name is required',
+          details: 'Please provide institutionName in the request or login as an institution'
+        },
+        meta: { generationId }
+      });
+    }
+
+    // Get institute logo from request or user profile
+    const institutionLogo = requestInstitutionLogo || (req.user?.instituteLogo || '');
+    console.log(`[${generationId}] Using institution logo: ${institutionLogo || 'Default logo'}`);
+
+    const metadata = {
+      referenceId,
+      candidateName,
+      courseName,
+      institutionName
+    };
+
+    const additionalMetadata = {
+      issuedDate: issuedDate || new Date().toISOString(),
+      institutionLogo,
+      generationDate: new Date().toISOString(),
+      blockchainTxId: "",
+      cryptographicSignature: ""
+    };
 
     // ======================
     // 1. Validation Phase
@@ -194,6 +248,19 @@ export const generateCertificate = async (req, res) => {
     const missingFields = Object.entries(metadata)
       .filter(([_, value]) => !value)
       .map(([key]) => key);
+
+    // Also validate recipientEmail if provided
+    if (recipientEmail && !recipientEmail.match(/\S+@\S+\.\S+/)) {
+      return res.status(400).json({
+        error: {
+          code: 'INVALID_EMAIL',
+          message: 'Invalid recipient email address',
+          fields: ['recipientEmail'],
+          documentation: 'https://api.yourservice.com/docs/certificates#required-fields'
+        },
+        meta: { generationId }
+      });
+    }
 
     if (missingFields.length > 0) {
       return res.status(400).json({
@@ -210,21 +277,41 @@ export const generateCertificate = async (req, res) => {
     // ======================
     // 2. Certificate ID Generation
     // ======================
-    const certificateId = generateCertificateHash(uid, candidateName, courseName, orgName);
-    let shortCode = generateVerificationShortCode();
-    console.log(`[${generationId}] Generated short code: ${shortCode}`);
+    const certificateId = generateCertificateHash(
+      metadata.referenceId,
+      candidateName,
+      courseName,
+      metadata.institutionName,
+      additionalMetadata.issuedDate
+    );
 
-    let codeExists = await Certificate.findOne({ shortCode });
+    let verificationCode = generateVerificationShortCode();
+    console.log(`[${generationId}] Generated verification code: ${verificationCode}`);
+
+    let codeExists = await Certificate.findOne({ verificationCode });
     while (codeExists) {
-      console.log(`[${generationId}] Short code ${shortCode} already exists, regenerating...`);
-      shortCode = generateVerificationShortCode();
-      codeExists = await Certificate.findOne({ shortCode });
+      console.log(`[${generationId}] Verification code ${verificationCode} already exists, regenerating...`);
+      verificationCode = generateVerificationShortCode();
+      codeExists = await Certificate.findOne({ verificationCode });
     }
+
+    // Create digital signature using institute's secret key if available
+    const instituteSignatureKey = req.user?.signatureKey || process.env.SIGNATURE_SECRET || 'veryhubsecretkey';
+    const instituteId = req.user?.id || 'anonymous';
+
+    // Include the institute's ID in the data to sign for better security
+    const dataToSign = `${certificateId}|${metadata.referenceId}|${candidateName}|${metadata.institutionName}|${additionalMetadata.issuedDate}|${instituteId}`;
+    additionalMetadata.cryptographicSignature = crypto.createHmac('sha256', instituteSignatureKey)
+      .update(dataToSign)
+      .digest('hex');
+
+    console.log(`[${generationId}] Created cryptographic signature with institute key`);
 
     const certificateData = {
       certificateId,
-      shortCode,
+      verificationCode,
       ...metadata,
+      ...additionalMetadata,
       generationId,
       createdAt: new Date().toISOString()
     };
@@ -233,8 +320,11 @@ export const generateCertificate = async (req, res) => {
     // 3. Existence Checks
     // ======================
     try {
+      // Get the actual contract instance using the getter function
+      const contractInstance = getContract();
+
       const [blockchainExists, dbExists] = await Promise.all([
-        contract.methods.isVerified(certificateId).call(),
+        contractInstance.methods.isVerified(certificateId).call(),
         Certificate.findOne({ certificateId }).lean()
       ]);
 
@@ -255,34 +345,46 @@ export const generateCertificate = async (req, res) => {
       }
     } catch (checkError) {
       console.error(`[${generationId}] Existence check failed:`, checkError);
-      return res.status(500).json({
-        error: {
-          code: 'SYSTEM_CHECK_FAILED',
-          message: 'Failed to verify certificate status',
-          retry: true,
-          retryAfter: '5 minutes'
-        },
-        meta: certificateData
-      });
+      // Don't fail if blockchain check fails, just log it and continue
+      console.log(`[${generationId}] Continuing certificate generation despite blockchain check error`);
     }
 
     // ======================
-    // 4. PDF Generation - Fixed function name and parameters
+    // 4. PDF Generation
     // ======================
     const outputDir = path.resolve('uploads');
     const pdfFilePath = path.join(outputDir, `cert_${generationId}.pdf`);
+
+    // Check if developer page is requested (false by default)
+    const includeDeveloperPage = req.query.developer === 'true';
+
+    // Get certificate type (default to ACHIEVEMENT if not specified)
+    const validCertTypes = ["ACHIEVEMENT", "COMPLETION", "PARTICIPATION"];
+    let certificateType = (req.body.certificateType || "").toUpperCase();
+    if (!validCertTypes.includes(certificateType)) {
+      certificateType = "ACHIEVEMENT";
+    }
+    console.log(`[${generationId}] Creating certificate of type: ${certificateType}`);
 
     try {
       await fs.promises.mkdir(outputDir, { recursive: true });
       await generateCertificatePdf(
         pdfFilePath,
-        uid,
+        metadata.referenceId,
         candidateName,
         courseName,
-        orgName,
+        metadata.institutionName,
         path.resolve('public/assets/logo.jpg'),
-        shortCode,
-        `${req.protocol}://${req.get('host')}/api/certificates/code/${shortCode}`
+        verificationCode,
+        `${req.protocol}://${req.get('host')}/api/certificates/code/${verificationCode}`,
+        additionalMetadata.issuedDate,
+        additionalMetadata.institutionLogo,
+        additionalMetadata.cryptographicSignature,
+        certificateId,
+        includeDeveloperPage, // Pass the developer page flag
+        validUntil, // Pass validUntil from the request
+        additionalMetadata, // Pass all additional metadata
+        certificateType // Pass the certificate type
       );
     } catch (pdfError) {
       console.error(`[${generationId}] PDF generation failed:`, pdfError);
@@ -319,20 +421,34 @@ export const generateCertificate = async (req, res) => {
     // ======================
     // 6. Blockchain Registration
     // ======================
+    let tx = null; // Initialize tx variable outside the try-catch block
     try {
-      const accounts = await web3.eth.getAccounts();
-      const tx = await contract.methods
+      // Get the initialized instances
+      const contractInstance = getContract();
+      const web3Instance = getWeb3();
+
+      const accounts = await web3Instance.eth.getAccounts();
+      console.log(`[${generationId}] Using account for transaction: ${accounts[0]}`);
+
+      tx = await contractInstance.methods
         .generateCertificate(
           certificateId,
-          uid,
+          metadata.referenceId,
           candidateName,
           courseName,
-          orgName,
+          metadata.institutionName,
+          additionalMetadata.issuedDate,
+          additionalMetadata.institutionLogo,
+          additionalMetadata.generationDate,
+          "pending", // Placeholder for blockchainTxId, will be updated
+          additionalMetadata.cryptographicSignature,
           ipfsData.ipfsHash
         )
         .send({ from: accounts[0], gas: 1000000 });
 
       certificateData.blockchainTx = tx.transactionHash;
+      certificateData.blockchainTxId = tx.transactionHash;
+      certificateData.blockNumber = tx.blockNumber;
     } catch (blockchainError) {
       console.error(`[${generationId}] Blockchain registration failed:`, blockchainError);
       return res.status(500).json({
@@ -351,12 +467,18 @@ export const generateCertificate = async (req, res) => {
     try {
       const newCertificate = await Certificate.create({
         certificateId,
-        shortCode,
-        uid,
+        verificationCode,
+        referenceId: metadata.referenceId,
         candidateName,
         courseName,
-        orgName,
-        issuer: req.user.id,
+        institutionName: metadata.institutionName,
+        issuedDate: additionalMetadata.issuedDate,
+        validUntil: validUntil,
+        institutionLogo: additionalMetadata.institutionLogo,
+        generationDate: additionalMetadata.generationDate,
+        blockchainTxId: certificateData.blockchainTxId,
+        cryptographicSignature: additionalMetadata.cryptographicSignature,
+        issuer: req.user ? req.user.id : null,
         ipfsHash: ipfsData.ipfsHash,
         sha256Hash: ipfsData.sha256Hash,
         cidHash: ipfsData.cidHash,
@@ -379,22 +501,89 @@ export const generateCertificate = async (req, res) => {
     }
 
     // ======================
-    // 8. Success Response
+    // 9. Response and Cleanup
     // ======================
-    return res.status(201).json(successResponse({
-      certificateId,
-      shortCode,
-      verificationUrl: `/api/certificates/${certificateId}/verify`,
-      ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/ipfs/${ipfsData.ipfsHash}`,
-      transaction: {
-        hash: certificateData.blockchainTx
-      },
-      computedHashes: {
-        sha256Hash: ipfsData.sha256Hash,
-        cidHash: ipfsData.cidHash,
-        ipfsHash: ipfsData.ipfsHash
+    const endTime = Date.now();
+    const processingTime = ((endTime - startTime) / 1000).toFixed(2);
+
+    console.log(`[${generationId}] Certificate generated successfully in ${processingTime}s`);
+
+    // Send email to recipient if email was provided
+    let emailSent = false;
+    if (recipientEmail) {
+      try {
+        // Create frontend verification URL
+        const baseUrl = `${req.protocol}://${req.get('host')}`.replace(':3000', ':5173');
+        const verificationUrl = `${baseUrl}/verify?code=${verificationCode}&auto=true`;
+
+        // Generate IPFS gateway URL for the certificate
+        const pdfUrl = `${PINATA_GATEWAY_BASE_URL}/${ipfsData.ipfsHash}`;
+
+        // Send email with certificate links
+        const emailResult = await sendCertificateEmail(
+          recipientEmail,
+          candidateName,
+          courseName,
+          pdfUrl,
+          verificationUrl
+        );
+
+        emailSent = emailResult.success;
+
+        if (emailSent) {
+          console.log(`[${generationId}] Certificate email sent successfully to ${recipientEmail}`);
+        } else {
+          console.error(`[${generationId}] Failed to send certificate email: ${emailResult.error}`);
+        }
+      } catch (emailError) {
+        console.error(`[${generationId}] Email sending error:`, emailError);
+        // Don't fail the whole request if email fails
+        emailSent = false;
       }
-    }, 'Certificate generated successfully', 201));
+    }
+
+    // Return success response
+    return res.status(201).json({
+      success: true,
+      status: "SUCCESS",
+      message: "Certificate generated and registered successfully",
+      data: {
+        certificateId,
+        referenceId: metadata.referenceId,
+        verificationCode,
+        sha256Hash: ipfsData.sha256Hash,
+        ipfsHash: ipfsData.ipfsHash,
+        cidHash: ipfsData.cidHash,
+        transaction: {
+          hash: certificateData.blockchainTx,
+          block: certificateData.blockNumber,
+          confirmations: 1
+        },
+        verificationUrl: `/api/certificates/${certificateId}/verify`,
+        ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/ipfs/${ipfsData.ipfsHash}`,
+        emailSent, // Include whether email was sent
+        computedHashes: {
+          sha256Hash: ipfsData.sha256Hash,
+          cidHash: ipfsData.cidHash,
+          ipfsHash: ipfsData.ipfsHash
+        }
+      },
+      _links: {
+        self: `/api/certificates/generate`,
+        certificate: `/api/certificates/${certificateId}`,
+        verification: `/api/certificates/${certificateId}/verify`,
+        shortCode: `/api/certificates/code/${verificationCode}`,
+        transaction: `https://etherscan.io/tx/${certificateData.blockchainTx}`
+      },
+      meta: {
+        generationId,
+        processingTime: `${processingTime}s`,
+        blockchain: {
+          network: process.env.NETWORK || 'development',
+          contract: process.env.CONTRACT_ADDRESS
+        }
+      }
+    });
   } catch (error) {
     console.error(`[${generationId}] Critical failure:`, error);
     return res.status(500).json({
@@ -424,7 +613,17 @@ export const uploadExternalCertificate = async (req, res) => {
     }
 
     // Validate required fields
-    const { orgName, candidateName } = req.body;
+    const {
+      orgName,
+      candidateName,
+      courseName,
+      validUntil, // New field for expiration
+      certificateType = "", // New field for certificate type
+      referenceId, // New field for custom reference ID
+      recipientEmail, // New field for recipient email
+      additionalFields = {} // For any other custom fields
+    } = req.body;
+
     if (!orgName || !candidateName) {
       console.log(`[${uploadId}] Missing required fields: orgName=${orgName}, candidateName=${candidateName}`);
       return res.status(400).json({
@@ -432,6 +631,28 @@ export const uploadExternalCertificate = async (req, res) => {
         message: 'Organization name and candidate name are required',
         uploadId
       });
+    }
+
+    // Also validate recipientEmail if provided
+    if (recipientEmail && !recipientEmail.match(/\S+@\S+\.\S+/)) {
+      return res.status(400).json({
+        error: {
+          code: 'INVALID_EMAIL',
+          message: 'Invalid recipient email address',
+          fields: ['recipientEmail']
+        },
+        meta: { uploadId }
+      });
+    }
+
+    // Get certificate type (default to ACHIEVEMENT if not specified but provided)
+    const validCertTypes = ["ACHIEVEMENT", "COMPLETION", "PARTICIPATION"];
+    let finalCertificateType = (certificateType || "").toUpperCase();
+    if (certificateType && !validCertTypes.includes(finalCertificateType)) {
+      finalCertificateType = "ACHIEVEMENT";
+    }
+    if (certificateType) {
+      console.log(`[${uploadId}] Certificate type: ${finalCertificateType}`);
     }
 
     // Step 2: Process file and compute hashes
@@ -457,11 +678,21 @@ export const uploadExternalCertificate = async (req, res) => {
 
     // Step 4: Generate a unique certificate ID and UID
     const uid = crypto.randomBytes(16).toString('hex');
+    const issuedDate = new Date().toISOString();
+    const generationDate = new Date().toISOString();
+
+    // Create digital signature
+    const dataToSign = `${uid}|${candidateName}|${courseName || 'External Certificate'}|${orgName}|${issuedDate}`;
+    const digitalSignature = crypto.createHmac('sha256', process.env.SIGNATURE_SECRET || 'veryhubsecretkey')
+      .update(dataToSign)
+      .digest('hex');
+
     const certificateId = generateCertificateHash(
       uid,
       candidateName,
-      'External Certificate',
-      orgName
+      courseName || 'External Certificate',
+      orgName,
+      issuedDate
     );
     console.log(`[${uploadId}] Generated certificateId: ${certificateId}`);
 
@@ -470,19 +701,28 @@ export const uploadExternalCertificate = async (req, res) => {
     console.log(`[${uploadId}] Generated short code: ${shortCode}`);
 
     // Step 5: Store on blockchain
-    let tx;
+    let tx = null;
     try {
-      const accounts = await web3.eth.getAccounts();
+      // Get the initialized instances
+      const contractInstance = getContract();
+      const web3Instance = getWeb3();
+
+      const accounts = await web3Instance.eth.getAccounts();
       console.log(`[${uploadId}] Using account for transaction: ${accounts[0]}`);
 
-      tx = await contract.methods
+      tx = await contractInstance.methods
         .generateCertificate(
           certificateId,
           uid,
           candidateName,
-          'External Certificate',
+          courseName || 'External Certificate',
           orgName,
-          hashData.ipfsHash // Use Pinata's IPFS hash for blockchain storage
+          issuedDate,
+          '', // collegeLogo
+          generationDate,
+          'pending', // transactionId - will update after transaction
+          digitalSignature,
+          hashData.ipfsHash
         )
         .send({ from: accounts[0], gas: 1000000 });
 
@@ -501,19 +741,64 @@ export const uploadExternalCertificate = async (req, res) => {
     try {
       const newCertificate = await Certificate.create({
         certificateId,
-        uid,
+        verificationCode: shortCode,
+        uid, // Keep for backward compatibility
+        referenceId: referenceId || uid, // Use provided referenceId or uid as fallback
         candidateName,
-        courseName: 'External Certificate',
-        orgName,
+        courseName: courseName || 'External Certificate',
+        institutionName: orgName, // Map orgName to institutionName
+        issuedDate,
+        validUntil: validUntil ? new Date(validUntil) : undefined, // Add the expiration date if provided
+        generationDate,
+        blockchainTxId: tx?.transactionHash,
+        cryptographicSignature: digitalSignature, // Map digitalSignature to cryptographicSignature
         ipfsHash: hashData.ipfsHash,
         sha256Hash: hashData.sha256Hash,
         cidHash: hashData.cidHash,
-        blockchainTx: tx.transactionHash,
+        blockchainTx: tx?.transactionHash,
         shortCode,
-        source: 'external'
+        source: 'external',
+        status: 'PENDING',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        additionalMetadata: additionalFields // Add any additional fields
       });
 
       console.log(`[${uploadId}] External certificate saved to database with ID: ${newCertificate._id}`);
+
+      // Send email to recipient if email was provided
+      let emailSent = false;
+      if (recipientEmail) {
+        try {
+          // Create frontend verification URL
+          const baseUrl = `${req.protocol}://${req.get('host')}`.replace(':3000', ':5173');
+          const verificationUrl = `${baseUrl}/verify?code=${shortCode}&auto=true`;
+
+          // Generate IPFS gateway URL for the certificate
+          const pdfUrl = `${PINATA_GATEWAY_BASE_URL}/ipfs/${hashData.ipfsHash}`;
+
+          // Send email with certificate links
+          const emailResult = await sendCertificateEmail(
+            recipientEmail,
+            candidateName,
+            courseName || 'External Certificate',
+            pdfUrl,
+            verificationUrl
+          );
+
+          emailSent = emailResult.success;
+
+          if (emailSent) {
+            console.log(`[${uploadId}] Certificate email sent successfully to ${recipientEmail}`);
+          } else {
+            console.error(`[${uploadId}] Failed to send certificate email: ${emailResult.error}`);
+          }
+        } catch (emailError) {
+          console.error(`[${uploadId}] Email sending error:`, emailError);
+          // Don't fail the whole request if email fails
+          emailSent = false;
+        }
+      }
 
       // Step 7: Return success response
       return res.status(201).json({
@@ -522,17 +807,27 @@ export const uploadExternalCertificate = async (req, res) => {
         message: 'Certificate uploaded and verified successfully',
         data: {
           certificateId,
+          referenceId: referenceId || uid,
           shortCode,
+          verificationCode: shortCode,
           verificationUrl: `/api/certificates/${certificateId}/verify`,
           ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/ipfs/${hashData.ipfsHash}`,
-          transaction: {
+          transaction: tx ? {
             hash: tx.transactionHash,
             block: tx.blockNumber
-          },
+          } : null,
+          emailSent: emailSent || false,
           computedHashes: {
             sha256Hash: hashData.sha256Hash,
             cidHash: hashData.cidHash,
             ipfsHash: hashData.ipfsHash
+          },
+          metadata: {
+            candidateName,
+            courseName: courseName || 'External Certificate',
+            institutionName: orgName,
+            certificateType: finalCertificateType || undefined,
+            validUntil: validUntil || undefined
           }
         },
         timestamp: new Date().toISOString()
@@ -547,16 +842,27 @@ export const uploadExternalCertificate = async (req, res) => {
         message: 'Certificate uploaded but database sync failed',
         data: {
           certificateId,
+          referenceId: referenceId || uid,
+          shortCode,
+          verificationCode: shortCode,
           verificationUrl: `/api/certificates/${certificateId}/verify`,
           ipfsGateway: `${PINATA_GATEWAY_BASE_URL}/ipfs/${hashData.ipfsHash}`,
-          transaction: {
+          transaction: tx ? {
             hash: tx.transactionHash,
             block: tx.blockNumber
-          },
+          } : null,
+          emailSent: emailSent || false,
           computedHashes: {
             sha256Hash: hashData.sha256Hash,
             cidHash: hashData.cidHash,
             ipfsHash: hashData.ipfsHash
+          },
+          metadata: {
+            candidateName,
+            courseName: courseName || 'External Certificate',
+            institutionName: orgName,
+            certificateType: finalCertificateType || undefined,
+            validUntil: validUntil || undefined
           }
         },
         warning: 'Certificate exists on blockchain but may not be retrievable from database',
@@ -600,7 +906,8 @@ export const verifyCertificateById = async (req, res) => {
 
       // Verify on blockchain
       try {
-        const blockchainData = await contract.methods.getCertificate(certificateId).call();
+        const contractInstance = getContract();
+        const blockchainData = await contractInstance.methods.getCertificate(certificateId).call();
         console.log(`[${verificationId}] Blockchain data:`, blockchainData);
 
         // Parse the blockchain data
@@ -610,9 +917,14 @@ export const verifyCertificateById = async (req, res) => {
           status: 'VALID',
           certificate: {
             uid: certificate.uid,
+            certificateId: certificate.certificateId,
             candidateName: certificate.candidateName,
             courseName: certificate.courseName,
             orgName: certificate.orgName,
+            issuedDate: certificate.issuedDate,
+            generationDate: certificate.generationDate,
+            transactionId: certificate.transactionId,
+            digitalSignature: certificate.digitalSignature,
             ipfsHash: certificate.ipfsHash,
             timestamp: parsedData.timestamp,
             revoked: parsedData.revoked
@@ -631,9 +943,14 @@ export const verifyCertificateById = async (req, res) => {
           status: 'VALID_WITH_WARNING',
           certificate: {
             uid: certificate.uid,
+            certificateId: certificate.certificateId,
             candidateName: certificate.candidateName,
             courseName: certificate.courseName,
             orgName: certificate.orgName,
+            issuedDate: certificate.issuedDate,
+            generationDate: certificate.generationDate,
+            transactionId: certificate.transactionId,
+            digitalSignature: certificate.digitalSignature,
             ipfsHash: certificate.ipfsHash
           },
           verificationId,
@@ -650,7 +967,8 @@ export const verifyCertificateById = async (req, res) => {
     console.log(`[${verificationId}] Certificate not found in database, checking blockchain`);
 
     try {
-      const blockchainData = await contract.methods.getCertificate(certificateId).call();
+      const contractInstance = getContract();
+      const blockchainData = await contractInstance.methods.getCertificate(certificateId).call();
       console.log(`[${verificationId}] Certificate found on blockchain:`, blockchainData);
 
       // Parse the blockchain data
@@ -658,7 +976,10 @@ export const verifyCertificateById = async (req, res) => {
 
       return res.json({
         status: 'VALID',
-        certificate: parsedData,
+        certificate: {
+          ...parsedData,
+          certificateId
+        },
         verificationId,
         warning: 'Certificate verified on blockchain but not found in database',
         _links: {
@@ -961,7 +1282,8 @@ export const getCertificatePDF = async (req, res) => {
     }
 
     // 2. Fetch certificate data from blockchain
-    const certificateData = await contract.methods.getCertificate(certificateId).call();
+    const contractInstance = getContract();
+    const certificateData = await contractInstance.methods.getCertificate(certificateId).call();
 
     // 3. Extract IPFS hash with multiple fallbacks
     const ipfsHash = (
@@ -1130,7 +1452,8 @@ export const searchByCID = async (req, res) => {
     let blockchainError = null;
 
     try {
-      isValid = await contract.methods.isVerified(certificate.certificateId).call();
+      const contractInstance = getContract();
+      isValid = await contractInstance.methods.isVerified(certificate.certificateId).call();
     } catch (error) {
       console.error(`[${requestId}] Blockchain verification error:`, error);
       blockchainError = error.message;
@@ -1232,11 +1555,19 @@ export const getCertificateStats = async (req, res) => {
 
 export const getOrgCertificates = async (req, res) => {
   const page = parseInt(req.query.page) || 1;
-  const { orgName } = req.params;
+  // Support both parameter names for backwards compatibility
+  const institutionName = req.params.institutionName || req.params.orgName;
   const limit = parseInt(req.query.limit) || 10;
 
   try {
-    const query = { orgName: new RegExp(orgName, 'i') };
+    // Query using both field names for backward compatibility
+    const query = {
+      $or: [
+        { institutionName: new RegExp(institutionName, 'i') },
+        { orgName: new RegExp(institutionName, 'i') }
+      ]
+    };
+
     const [certificates, count] = await Promise.all([
       Certificate.find(query)
         .sort('-createdAt')
@@ -1247,26 +1578,37 @@ export const getOrgCertificates = async (req, res) => {
     ]);
 
     res.json({
-      total: count,
-      page,
-      totalPages: Math.ceil(count / limit),
-      certificates: certificates.map(cert => ({
-        id: cert.certificateId || cert.cid,
-        type: cert.certificateId ? 'internal' : 'external',
-        candidate: cert.candidateName,
-        issueDate: cert.createdAt,
-        ...(cert.certificateId && {
-          verifyUrl: `/api/certificates/${cert.certificateId}/verify`
-        })
-      }))
+      success: true,
+      status: "SUCCESS",
+      message: "Institution certificates retrieved",
+      data: {
+        institution: institutionName,
+        total: count,
+        page,
+        totalPages: Math.ceil(count / limit),
+        certificates: certificates.map(cert => ({
+          certificateId: cert.certificateId || cert.cid,
+          candidateName: cert.candidateName,
+          courseName: cert.courseName,
+          issuedDate: cert.createdAt,
+          verificationCode: cert.verificationCode || cert.shortCode,
+          status: cert.revoked ? "REVOKED" : "VALID"
+        }))
+      },
+      timestamp: new Date().toISOString()
     });
 
   } catch (error) {
     res.status(500).json({
-      code: 'ORG_CERTS_ERROR',
-      message: 'Failed to fetch organization certificates',
-      orgName,
-      details: error.message
+      success: false,
+      status: "ERROR",
+      code: 'INSTITUTION_CERTS_ERROR',
+      message: 'Failed to fetch institution certificates',
+      details: {
+        institutionName,
+        errorDetails: error.message
+      },
+      timestamp: new Date().toISOString()
     });
   }
 };

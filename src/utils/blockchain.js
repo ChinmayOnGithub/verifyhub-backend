@@ -128,5 +128,11 @@ export const checkBlockchainStatus = async () => {
 };
 
 // ========== Backward compatibility ==========
-// Maintain original export structure
-export { web3, contract };
+// Maintain original export structure but also ensure initialization
+// Don't directly export null values
+export { getWeb3 as web3, getContract as contract };
+
+// Initialize blockchain connection by default
+initializeBlockchain().catch(err => {
+  console.error('Failed to initialize blockchain on startup:', err.message);
+});

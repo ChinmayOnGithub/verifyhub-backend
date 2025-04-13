@@ -3,13 +3,18 @@ pragma solidity ^0.8.13;
 
 contract Certification {
     struct Certificate {
-        string uid;
+        string referenceId;
         string candidateName;
         string courseName;
-        string orgName;
+        string institutionName;
+        string issuedDate;
+        string institutionLogo;
+        string generationDate;
+        string blockchainTxId;
+        string cryptographicSignature;
         string ipfsHash;
         uint256 timestamp;
-        bool revoked; // Added revoked status to struct
+        bool revoked;
     }
 
     mapping(string => Certificate) public certificates;
@@ -17,7 +22,7 @@ contract Certification {
     
     event CertificateGenerated(
         string indexed certificateId,
-        string uid,
+        string referenceId,
         string candidateName,
         string ipfsHash,
         uint256 timestamp
@@ -36,10 +41,15 @@ contract Certification {
 
     function generateCertificate(
         string memory certificateId,
-        string memory uid,
+        string memory referenceId,
         string memory candidateName,
         string memory courseName,
-        string memory orgName,
+        string memory institutionName,
+        string memory issuedDate,
+        string memory institutionLogo,
+        string memory generationDate,
+        string memory blockchainTxId,
+        string memory cryptographicSignature,
         string memory ipfsHash
     ) public onlyOwner {
         require(
@@ -50,38 +60,53 @@ contract Certification {
         require(bytes(ipfsHash).length > 0, "Empty IPFS hash");
 
         certificates[certificateId] = Certificate({
-            uid: uid,
+            referenceId: referenceId,
             candidateName: candidateName,
             courseName: courseName,
-            orgName: orgName,
+            institutionName: institutionName,
+            issuedDate: issuedDate,
+            institutionLogo: institutionLogo,
+            generationDate: generationDate,
+            blockchainTxId: blockchainTxId,
+            cryptographicSignature: cryptographicSignature,
             ipfsHash: ipfsHash,
             timestamp: block.timestamp,
-            revoked: false // Initialize revoked status
+            revoked: false
         });
 
-        emit CertificateGenerated(certificateId, uid, candidateName, ipfsHash, block.timestamp);
+        emit CertificateGenerated(certificateId, referenceId, candidateName, ipfsHash, block.timestamp);
     }
 
     function getCertificate(string memory certificateId)
         public
         view
         returns (
-            string memory uid,
+            string memory referenceId,
             string memory candidateName,
             string memory courseName,
-            string memory orgName,
+            string memory institutionName,
+            string memory issuedDate,
+            string memory institutionLogo,
+            string memory generationDate,
+            string memory blockchainTxId,
+            string memory cryptographicSignature,
             string memory ipfsHash,
             uint256 timestamp,
             bool revoked
         )
     {
         Certificate memory c = certificates[certificateId];
-        require(bytes(c.uid).length != 0, "Certificate not found"); // Changed check to uid
+        require(bytes(c.referenceId).length != 0, "Certificate not found");
         return (
-            c.uid,
+            c.referenceId,
             c.candidateName,
             c.courseName,
-            c.orgName,
+            c.institutionName,
+            c.issuedDate,
+            c.institutionLogo,
+            c.generationDate,
+            c.blockchainTxId,
+            c.cryptographicSignature,
             c.ipfsHash,
             c.timestamp,
             c.revoked
@@ -90,13 +115,12 @@ contract Certification {
 
     function isVerified(string memory certificateId) public view returns (bool) {
         Certificate memory c = certificates[certificateId];
-        return bytes(c.uid).length != 0 && !c.revoked; 
-        // Changed check to uid
+        return bytes(c.referenceId).length != 0 && !c.revoked; 
     }
 
     function revokeCertificate(string memory certificateId) public onlyOwner {
         Certificate memory c = certificates[certificateId];
-        require(bytes(c.uid).length != 0, "Certificate not found"); // Changed check to uid
+        require(bytes(c.referenceId).length != 0, "Certificate not found");
         require(!c.revoked, "Already revoked");
         
         certificates[certificateId].revoked = true;

@@ -4,12 +4,18 @@ import mongoose from 'mongoose';
 const CertificateSchema = new mongoose.Schema(
   {
     certificateId: { type: String, required: true, unique: true },
-    shortCode: { type: String, required: true, unique: true, uppercase: true },
+    verificationCode: { type: String, required: true, unique: true, uppercase: true },
     institutionalSignature: { type: String },
-    uid: { type: String, required: true },
+    referenceId: { type: String, required: true },
     candidateName: { type: String, required: true },
     courseName: { type: String, required: true },
-    orgName: { type: String, required: true },
+    institutionName: { type: String, required: true },
+    issuedDate: { type: Date },
+    validUntil: { type: Date },
+    institutionLogo: { type: String },
+    generationDate: { type: Date, default: Date.now },
+    blockchainTxId: { type: String },
+    cryptographicSignature: { type: String },
     issuer: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     ipfsHash: { type: String, required: true },
     sha256Hash: { type: String },
@@ -32,14 +38,16 @@ const CertificateSchema = new mongoose.Schema(
     timestamps: true,
     indexes: [
       { certificateId: 1 },
-      { shortCode: 1 },
+      { verificationCode: 1 },
       { ipfsHash: 1 },
       { sha256Hash: 1 },
       { cidHash: 1 },
       { blockchainTx: 1 },
       { candidateName: 1 },
-      { orgName: 1 },
-      { issuer: 1 }
+      { institutionName: 1 },
+      { issuer: 1 },
+      { issuedDate: 1 },
+      { blockchainTxId: 1 }
     ]
   }
 );

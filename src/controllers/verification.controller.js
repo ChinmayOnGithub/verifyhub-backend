@@ -1,13 +1,15 @@
 // src/controllers/verification.controller.js
 // Certificate verification functionality
 import crypto from 'crypto';
-import { contract } from '../utils/blockchain.js';
+import { getContract } from '../utils/blockchain.js';
 import Certificate from '../models/certificate.model.js';
 import { helpers } from './certificate.controller.js';
 import { verificationResponse, successResponse } from '../utils/responseUtils.js';
 import { errorResponse, ErrorCodes } from '../utils/errorUtils.js';
 
 const { blockchainErrorHandler } = helpers;
+// Remove the immediate contract initialization
+// const contract = getContract();
 
 // Helper function
 const parseCertificateData = (data) => {
@@ -77,6 +79,9 @@ export const verifyCertificateById = async (req, res) => {
     }
 
     console.log(`[${verificationId}] Certificate found in database: ${certificate.candidateName}`);
+
+    // Get contract instance when needed
+    const contract = getContract();
 
     // Verify on blockchain
     let isVerified = false;
@@ -159,20 +164,21 @@ export const verifyCertificateById = async (req, res) => {
  * @returns {Object} Certificate verification result or error
  */
 export const verifyCertificateByShortCode = async (req, res) => {
-  const { shortCode } = req.params;
+  // Support both parameter names for backwards compatibility
+  const code = req.params.verificationCode || req.params.shortCode;
   const verificationId = crypto.randomBytes(4).toString('hex');
 
-  console.log(`[${verificationId}] Verifying certificate by short code: ${shortCode}`);
+  console.log(`[${verificationId}] Verifying certificate by verification code: ${code}`);
 
   try {
     // Sanitize and validate format
-    const sanitizedCode = shortCode.toUpperCase().trim();
+    const sanitizedCode = code.toUpperCase().trim();
 
     if (!/^[A-Z0-9]{4}$/.test(sanitizedCode)) {
-      console.log(`[${verificationId}] Invalid short code format: ${sanitizedCode}`);
+      console.log(`[${verificationId}] Invalid verification code format: ${sanitizedCode}`);
       const { response, statusCode } = errorResponse(
         'INVALID_FORMAT',
-        'Short code must be 4 characters (A-Z, 0-9)',
+        'Verification code must be 4 characters (A-Z, 0-9)',
         {
           example: 'A12B',
           providedCode: sanitizedCode
@@ -182,15 +188,21 @@ export const verifyCertificateByShortCode = async (req, res) => {
       return res.status(statusCode).json(response);
     }
 
-    // Find certificate by short code
-    const certificate = await Certificate.findOne({ shortCode: sanitizedCode });
+    // Find certificate by verification code
+    // First try with new field name, then fallback to old field name for backwards compatibility
+    let certificate = await Certificate.findOne({ verificationCode: sanitizedCode });
 
     if (!certificate) {
-      console.log(`[${verificationId}] No certificate found with short code: ${sanitizedCode}`);
+      // Try with the old field name for backward compatibility
+      certificate = await Certificate.findOne({ shortCode: sanitizedCode });
+    }
+
+    if (!certificate) {
+      console.log(`[${verificationId}] No certificate found with verification code: ${sanitizedCode}`);
       const { response, statusCode } = errorResponse(
         'CERTIFICATE_NOT_FOUND',
         'Certificate with this code does not exist',
-        { shortCode: sanitizedCode },
+        { verificationCode: sanitizedCode },
         verificationId
       );
       return res.status(statusCode).json(response);
@@ -198,35 +210,72 @@ export const verifyCertificateByShortCode = async (req, res) => {
 
     console.log(`[${verificationId}] Certificate found: ${certificate.certificateId}`);
 
-    // Determine status
-    const status = certificate.revoked ? 'REVOKED' : 'VALID';
+    // Get contract instance when needed
+    const contract = getContract();
+
+    // Verify on blockchain
+    let isVerified = false;
+    let txError = null;
+
+    try {
+      isVerified = await contract.methods.isVerified(certificate.certificateId).call();
+      console.log(`[${verificationId}] Blockchain verification result: ${isVerified}`);
+    } catch (error) {
+      console.error(`[${verificationId}] Blockchain verification error:`, error);
+      txError = error.message;
+    }
+
+    // Determine verification status
+    let status = 'VALID';
+    let blockchainData = {};
+
+    if (certificate.revoked) {
+      status = 'REVOKED';
+    } else if (!isVerified && txError) {
+      status = 'VALID_WITH_WARNING';
+      blockchainData = {
+        blockchainError: 'Could not verify on blockchain',
+        errorDetails: txError
+      };
+    } else if (!isVerified) {
+      status = 'VALID_WITH_WARNING';
+      blockchainData = {
+        blockchainWarning: 'Certificate not found on blockchain'
+      };
+    } else {
+      blockchainData = {
+        blockchainVerified: true
+      };
+    }
 
     // Return standardized response
     return res.json(verificationResponse(
       status,
       {
-        uid: certificate.uid,
+        referenceId: certificate.referenceId || certificate.uid,
         certificateId: certificate.certificateId,
         candidateName: certificate.candidateName,
         courseName: certificate.courseName,
-        orgName: certificate.orgName,
+        institutionName: certificate.institutionName || certificate.orgName,
         ipfsHash: certificate.ipfsHash,
         issuedAt: certificate.createdAt,
         revoked: certificate.revoked || false,
-        shortCode: certificate.shortCode
+        verificationCode: certificate.verificationCode || certificate.shortCode,
+        blockchainTxId: certificate.blockchainTxId || certificate.transactionId
       },
       verificationId,
       {
         pdf: `https://gateway.pinata.cloud/ipfs/${certificate.ipfsHash}`,
-        blockchain: `http://localhost:8545/tx/${certificate.transactionHash || certificate.certificateId}`,
+        blockchain: `http://localhost:8545/tx/${certificate.blockchainTxId || certificate.transactionId || certificate.certificateId}`,
         verification: `/api/certificates/${certificate.certificateId}/verify`
-      }
+      },
+      blockchainData
     ));
   } catch (error) {
-    console.error(`[${verificationId}] Short Code Verification Error:`, error);
+    console.error(`[${verificationId}] Verification Code Verification Error:`, error);
     const { response, statusCode } = errorResponse(
       'INTERNAL_ERROR',
-      'Failed to verify certificate by short code',
+      'Failed to verify certificate by verification code',
       {
         errorDetails: error.message,
         stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
@@ -262,6 +311,9 @@ export const verifyInstitutionalSignature = async (req, res) => {
         certificateId
       });
     }
+
+    // Get contract instance when needed
+    const contract = getContract();
 
     // Find certificate in database
     const certificate = await Certificate.findOne({ certificateId });

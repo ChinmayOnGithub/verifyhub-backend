@@ -17,6 +17,7 @@ const CertificateSchema = new mongoose.Schema(
     blockchainTxId: { type: String },
     cryptographicSignature: { type: String },
     issuer: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    recipientEmail: { type: String },
     ipfsHash: { type: String, required: true },
     sha256Hash: { type: String },
     cidHash: { type: String },
@@ -47,7 +48,8 @@ const CertificateSchema = new mongoose.Schema(
       { institutionName: 1 },
       { issuer: 1 },
       { issuedDate: 1 },
-      { blockchainTxId: 1 }
+      { blockchainTxId: 1 },
+      { recipientEmail: 1 }
     ]
   }
 );

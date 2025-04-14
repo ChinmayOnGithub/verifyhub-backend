@@ -473,17 +473,17 @@ export const generateCertificate = async (req, res) => {
         courseName,
         institutionName: metadata.institutionName,
         issuedDate: additionalMetadata.issuedDate,
-        validUntil: validUntil,
+        validUntil: validUntil ? new Date(validUntil) : undefined,
         institutionLogo: additionalMetadata.institutionLogo,
         generationDate: additionalMetadata.generationDate,
-        blockchainTxId: certificateData.blockchainTxId,
+        blockchainTxId: tx?.transactionHash || '',
         cryptographicSignature: additionalMetadata.cryptographicSignature,
-        issuer: req.user ? req.user.id : null,
+        issuer: req.user?.id,
+        recipientEmail: recipientEmail,
         ipfsHash: ipfsData.ipfsHash,
         sha256Hash: ipfsData.sha256Hash,
         cidHash: ipfsData.cidHash,
-        blockchainTx: certificateData.blockchainTx,
-        source: 'internal',
+        blockchainTx: tx?.transactionHash,
         status: 'PENDING'
       });
 
@@ -752,6 +752,7 @@ export const uploadExternalCertificate = async (req, res) => {
         generationDate,
         blockchainTxId: tx?.transactionHash,
         cryptographicSignature: digitalSignature, // Map digitalSignature to cryptographicSignature
+        recipientEmail: recipientEmail, // Store recipient email
         ipfsHash: hashData.ipfsHash,
         sha256Hash: hashData.sha256Hash,
         cidHash: hashData.cidHash,
@@ -1780,6 +1781,69 @@ export const serveCertificatePDF = async (req, res) => {
       success: false,
       message: 'Failed to serve certificate PDF',
       details: error.message
+    });
+  }
+};
+
+// Get certificates by recipient email
+export const getCertificatesByEmail = async (req, res) => {
+  try {
+    const { email } = req.params;
+    const requestId = crypto.randomBytes(4).toString('hex');
+
+    // Validate email format
+    if (!email || !email.match(/\S+@\S+\.\S+/)) {
+      const { response, statusCode } = errorResponse(
+        'INVALID_EMAIL',
+        'Invalid email format',
+        { email },
+        requestId
+      );
+      return res.status(statusCode).json(response);
+    }
+
+    // Find certificates by recipient email
+    const certificates = await Certificate.find({ recipientEmail: email })
+      .sort({ createdAt: -1 }) // Sort by newest first
+      .lean();
+
+    if (!certificates || certificates.length === 0) {
+      return res.status(200).json(successResponse({
+        certificates: [],
+        count: 0
+      }, 'No certificates found for this email'));
+    }
+
+    // Format certificates for response
+    const formattedCertificates = certificates.map(cert => ({
+      certificateId: cert.certificateId,
+      verificationCode: cert.verificationCode,
+      candidateName: cert.candidateName,
+      courseName: cert.courseName,
+      institutionName: cert.institutionName,
+      issuedDate: cert.issuedDate,
+      validUntil: cert.validUntil,
+      ipfsHash: cert.ipfsHash,
+      status: cert.status,
+      createdAt: cert.createdAt,
+      _links: {
+        verification: `/api/certificates/code/${cert.verificationCode}`,
+        pdf: `${PINATA_GATEWAY_BASE_URL}/${cert.ipfsHash}`
+      }
+    }));
+
+    return res.status(200).json(successResponse({
+      certificates: formattedCertificates,
+      count: formattedCertificates.length
+    }, 'Certificates retrieved successfully'));
+  } catch (error) {
+    console.error('Error fetching certificates by email:', error);
+    return res.status(500).json({
+      error: {
+        code: 'SERVER_ERROR',
+        message: 'Failed to fetch certificates',
+        details: error.message
+      }
     });
   }
 };

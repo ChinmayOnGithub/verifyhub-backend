@@ -14,7 +14,8 @@ import {
   getOrgCertificates,
   getCertificatePDF,
   debugPdfVerification,
-  serveCertificatePDF
+  serveCertificatePDF,
+  getCertificatesByEmail
 } from '../controllers/certificate.controller.js';
 
 // Import from the new verification controller
@@ -61,6 +62,9 @@ router.get('/stats', authMiddleware, getCertificateStats);
 // Support both old and new naming in routes
 router.get('/institution/:institutionName', authMiddleware, getOrgCertificates);
 router.get('/organization/:orgName', authMiddleware, getOrgCertificates); // Keep for backward compatibility
+
+// Public endpoints (with rate limiting)
+router.get('/email/:email', apiLimiter, getCertificatesByEmail);
 
 export default router;
 

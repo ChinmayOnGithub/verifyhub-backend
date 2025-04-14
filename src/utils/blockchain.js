@@ -136,3 +136,257 @@ export { getWeb3 as web3, getContract as contract };
 initializeBlockchain().catch(err => {
   console.error('Failed to initialize blockchain on startup:', err.message);
 });
+
+// ========== NEW FEATURE: Certificate verification event listener ==========
+/**
+ * Sets up a certificate verification system
+ * Uses polling instead of subscriptions for maximum compatibility
+ */
+export const startCertificateConfirmationListener = async () => {
+  try {
+    if (!isInitialized || !contract) {
+      console.error('Cannot start listener: Blockchain not initialized');
+      return false;
+    }
+
+    // Import mongoose models - safely
+    let Certificate;
+    try {
+      const mongoose = await import('../models/certificate.model.js');
+      Certificate = mongoose.default || mongoose.Certificate;
+
+      if (!Certificate) {
+        throw new Error('Certificate model not found');
+      }
+    } catch (modelError) {
+      console.error('⛔ Error loading Certificate model:', modelError.message);
+      return false;
+    }
+
+    console.log('Starting blockchain certificate verification system...');
+
+    // Check which events are available in the contract ABI
+    const contractABI = contract._jsonInterface;
+    const availableEvents = contractABI
+      .filter(item => item.type === 'event')
+      .map(item => item.name);
+
+    console.log(`Available contract events: ${availableEvents.join(', ') || 'None found'}`);
+
+    // Set up polling instead of subscriptions
+    console.log('Setting up polling-based verification (no subscriptions required)');
+
+    // Setup interval for periodic checks (every 2 minutes)
+    const interval = setInterval(async () => {
+      try {
+        const count = await checkAndUpdateCertificates(Certificate);
+        console.log(`Periodic check complete: ${count.updated} certificates updated, ${count.failed} failed`);
+      } catch (err) {
+        console.error('Error in periodic certificate check:', err.message);
+      }
+    }, 2 * 60 * 1000); // Every 2 minutes
+
+    // Make sure interval is cleaned up if app shuts down
+    process.on('SIGINT', () => {
+      clearInterval(interval);
+      console.log('Certificate verification polling stopped');
+    });
+
+    // Initial check
+    setTimeout(async () => {
+      try {
+        console.log('Running initial certificate verification check...');
+        const count = await checkAndUpdateCertificates(Certificate);
+        console.log(`Initial check complete: ${count.updated} certificates updated`);
+      } catch (err) {
+        console.error('Error in initial certificate check:', err.message);
+      }
+    }, 5000); // 5 seconds after start
+
+    console.log('📡 Certificate verification system started');
+    return true;
+  } catch (error) {
+    console.error('Failed to start certificate verification system:', error.message);
+    // Don't let this error stop the application
+    return false;
+  }
+};
+
+/**
+ * Helper function to check and update certificates
+ * Used by both the listener and periodic updates
+ */
+async function checkAndUpdateCertificates(Certificate, limit = null) {
+  try {
+    // Find all PENDING certificates
+    const query = Certificate.find({ status: 'PENDING' }).sort({ createdAt: -1 });
+
+    // Apply limit if provided
+    if (limit) {
+      query.limit(limit);
+    }
+
+    const pendingCertificates = await query;
+    console.log(`Found ${pendingCertificates.length} pending certificates to check`);
+
+    if (pendingCertificates.length === 0) {
+      return { updated: 0, failed: 0 };
+    }
+
+    // Get available methods
+    const methods = Object.keys(contract.methods || {});
+
+    let updatedCount = 0;
+    let failedCount = 0;
+
+    for (const cert of pendingCertificates) {
+      try {
+        // Skip certificates without certificateId - they're invalid
+        if (!cert.certificateId) {
+          console.log(`⚠️ Certificate without ID found, skipping`);
+          continue;
+        }
+
+        console.log(`Checking certificate: ${cert.certificateId}`);
+
+        // First check by transaction receipt if available
+        if (cert.blockchainTx) {
+          try {
+            const receipt = await web3.eth.getTransactionReceipt(cert.blockchainTx);
+            if (receipt && receipt.blockNumber) {
+              // Transaction confirmed, update to CONFIRMED
+              await Certificate.updateOne(
+                { _id: cert._id },
+                {
+                  $set: {
+                    status: 'CONFIRMED',
+                    updatedAt: new Date()
+                  }
+                }
+              );
+              updatedCount++;
+              console.log(`✅ Certificate ${cert.certificateId} confirmed via transaction receipt`);
+              continue; // Skip to next cert
+            }
+          } catch (err) {
+            // Just log and continue to other verification methods
+            console.log(`Transaction check failed: ${err.message}`);
+          }
+        }
+
+        // Try verification methods in order of reliability
+        let isVerified = false;
+
+        // METHOD 1: isVerified
+        if (!isVerified && methods.includes('isVerified')) {
+          try {
+            isVerified = await contract.methods.isVerified(cert.certificateId).call();
+            if (isVerified) {
+              console.log(`Verified via isVerified: ${cert.certificateId}`);
+            }
+          } catch (err) {
+            // Just log and continue
+          }
+        }
+
+        // METHOD 2: getCertificate
+        if (!isVerified && methods.includes('getCertificate')) {
+          try {
+            await contract.methods.getCertificate(cert.certificateId).call();
+            // If no error, cert exists
+            isVerified = true;
+            console.log(`Verified via getCertificate: ${cert.certificateId}`);
+          } catch (err) {
+            // Just log and continue
+          }
+        }
+
+        // METHOD 3: getCertificateDetails
+        if (!isVerified && methods.includes('getCertificateDetails')) {
+          try {
+            await contract.methods.getCertificateDetails(cert.certificateId).call();
+            // If no error, cert exists
+            isVerified = true;
+            console.log(`Verified via getCertificateDetails: ${cert.certificateId}`);
+          } catch (err) {
+            // Just log and continue
+          }
+        }
+
+        // Update cert status based on verification
+        if (isVerified) {
+          await Certificate.updateOne(
+            { _id: cert._id },
+            {
+              $set: {
+                status: 'CONFIRMED',
+                updatedAt: new Date()
+              }
+            }
+          );
+          updatedCount++;
+          console.log(`✅ Certificate ${cert.certificateId} verified and updated to CONFIRMED`);
+        } else {
+          // Mark as FAILED if older than 15 minutes
+          const fifteenMinutesAgo = new Date(Date.now() - (15 * 60 * 1000));
+          if (cert.createdAt < fifteenMinutesAgo) {
+            await Certificate.updateOne(
+              { _id: cert._id },
+              {
+                $set: {
+                  status: 'FAILED',
+                  updatedAt: new Date()
+                }
+              }
+            );
+            failedCount++;
+            console.log(`❌ Certificate ${cert.certificateId} marked as FAILED (too old)`);
+          }
+        }
+      } catch (err) {
+        console.error(`Error processing certificate: ${err.message}`);
+      }
+    }
+
+    return { updated: updatedCount, failed: failedCount };
+  } catch (error) {
+    console.error('Error in certificate checking:', error.message);
+    return { updated: 0, failed: 0 };
+  }
+}
+
+// Simplified version that uses the shared helper function
+export const updatePendingCertificates = async (limit = null) => {
+  try {
+    if (!isInitialized || !contract) {
+      console.error('Cannot update pending certificates: Blockchain not initialized');
+      return false;
+    }
+
+    // Import mongoose models safely
+    let Certificate;
+    try {
+      const mongoose = await import('../models/certificate.model.js');
+      Certificate = mongoose.default || mongoose.Certificate;
+
+      if (!Certificate) {
+        throw new Error('Certificate model not found');
+      }
+    } catch (modelError) {
+      console.error('⛔ Error loading Certificate model:', modelError.message);
+      return false;
+    }
+
+    console.log('Checking for pending certificates that need status update...');
+
+    // Use the shared helper function
+    const results = await checkAndUpdateCertificates(Certificate, limit);
+
+    console.log(`Updated ${results.updated} certificates to CONFIRMED status and ${results.failed} to FAILED status`);
+    return true;
+  } catch (error) {
+    console.error('Failed to update pending certificates:', error.message);
+    // Don't crash the app
+    return false;
+  }
+};

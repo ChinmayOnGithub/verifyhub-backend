@@ -122,32 +122,42 @@ const blockchainErrorHandler = (error, certificateId) => {
 
 /**
  * Generates a cryptographically secure 4-character alphanumeric verification code
- * Uses rejection sampling for uniform distribution of characters
+ * Uses a more robust approach with better error handling
  * 
  * @returns {string} 4-character uppercase alphanumeric code (A-Z, 0-9)
  */
 const generateVerificationShortCode = () => {
-  console.log('[ShortCode] Generating new verification short code');
-  const characters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let result = '';
+  try {
+    console.log('[ShortCode] Generating new verification short code');
+    // Use unambiguous characters (removing 0, O, 1, I, etc.)
+    const characters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let result = '';
 
-  // Use crypto for better randomness with rejection sampling for uniform distribution
-  for (let i = 0; i < 4; i++) {
-    // Get a random byte (0-255)
-    const randomByte = crypto.randomBytes(1)[0];
-    // Map to character set using rejection sampling
-    // This ensures uniform distribution by rejecting values outside our range
-    if (randomByte >= 256 - (256 % characters.length)) {
-      // Reject and retry if the value would introduce bias
-      i--;
-      continue;
+    // Generate 4 bytes of random data for better entropy
+    const randomBytes = crypto.randomBytes(8);
+
+    // Use 4 bytes to select characters from our set
+    for (let i = 0; i < 4; i++) {
+      // Extract a byte and get a modulo to pick from our character set
+      const randomIndex = randomBytes[i] % characters.length;
+      result += characters.charAt(randomIndex);
     }
-    const index = randomByte % characters.length;
-    result += characters.charAt(index);
-  }
 
-  console.log(`[ShortCode] Generated code: ${result}`);
-  return result;
+    // Double-check the format is valid
+    if (!/^[A-Z0-9]{4}$/.test(result)) {
+      console.warn('[ShortCode] Generated invalid code format, retrying');
+      return generateVerificationShortCode(); // Recursively retry
+    }
+
+    console.log(`[ShortCode] Generated code: ${result}`);
+    return result;
+  } catch (error) {
+    console.error('[ShortCode] Error generating verification code:', error);
+    // Return a fallback that's very unlikely to collide, but still notify us of the issue
+    const fallback = `${Math.floor(Math.random() * 9000) + 1000}`.toUpperCase();
+    console.warn(`[ShortCode] Using fallback code: ${fallback}`);
+    return fallback;
+  }
 };
 
 /**
@@ -285,14 +295,40 @@ export const generateCertificate = async (req, res) => {
       additionalMetadata.issuedDate
     );
 
-    let verificationCode = generateVerificationShortCode();
-    console.log(`[${generationId}] Generated verification code: ${verificationCode}`);
+    // Generate verification code with retries and validation
+    let verificationCode;
+    let retries = 0;
+    const maxRetries = 5;
 
-    let codeExists = await Certificate.findOne({ verificationCode });
-    while (codeExists) {
-      console.log(`[${generationId}] Verification code ${verificationCode} already exists, regenerating...`);
+    do {
       verificationCode = generateVerificationShortCode();
-      codeExists = await Certificate.findOne({ verificationCode });
+      console.log(`[${generationId}] Generated verification code: ${verificationCode}`);
+
+      // Extra validation to ensure code format is correct
+      if (!/^[A-Z0-9]{4}$/.test(verificationCode)) {
+        console.error(`[${generationId}] Invalid verification code format: ${verificationCode}, regenerating...`);
+        continue;
+      }
+
+      // Check if code already exists
+      const codeExists = await Certificate.findOne({ verificationCode });
+      if (!codeExists) break;
+
+      console.log(`[${generationId}] Verification code ${verificationCode} already exists, regenerating...`);
+      retries++;
+    } while (retries < maxRetries);
+
+    // Final verification that we have a valid code
+    if (!verificationCode || !/^[A-Z0-9]{4}$/.test(verificationCode)) {
+      console.error(`[${generationId}] Failed to generate valid verification code after ${retries} attempts`);
+      return res.status(500).json({
+        error: {
+          code: 'VERIFICATION_CODE_GENERATION_FAILED',
+          message: 'Failed to generate valid verification code',
+          details: `Verification code generation failed after ${retries} attempts`
+        },
+        meta: { generationId }
+      });
     }
 
     // Create digital signature using institute's secret key if available

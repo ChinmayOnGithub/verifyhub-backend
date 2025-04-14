@@ -24,7 +24,7 @@
 // src/index.js
 import app from './app.js';
 import dotenv from 'dotenv';
-import { initializeBlockchain } from './utils/blockchain.js';
+import { initializeBlockchain, startCertificateConfirmationListener, updatePendingCertificates } from './utils/blockchain.js';
 import connectDB from './db/mongoose.js';
 
 dotenv.config();
@@ -45,7 +45,45 @@ const startServer = async () => {
       throw new Error('Failed to initialize blockchain connection');
     }
 
-    // 3. Start server
+    // 3. Start certificate status listeners and update pending certificates
+    console.log('📡 Starting certificate status listeners...');
+    await startCertificateConfirmationListener();
+
+    // 4. Update any existing pending certificates
+    console.log('🔍 Checking for pending certificates...');
+    await updatePendingCertificates();
+
+    // 5. Schedule regular checks for pending certificates
+    console.log('⏰ Setting up scheduled certificate checks...');
+
+    // Check every minute for first 10 minutes after startup (quick updates for new certificates)
+    let minuteCount = 0;
+    const quickInterval = setInterval(async () => {
+      try {
+        if (minuteCount > 10) {
+          clearInterval(quickInterval);
+          console.log('Quick check interval completed');
+          return;
+        }
+        console.log(`Quick check ${minuteCount + 1}/10 for pending certificates...`);
+        await updatePendingCertificates(20); // Check 20 most recent
+        minuteCount++;
+      } catch (err) {
+        console.error('Error in quick certificate check:', err);
+      }
+    }, 60 * 1000); // Every minute
+
+    // Check every 5 minutes for ongoing verification
+    setInterval(async () => {
+      try {
+        console.log('Running regular certificate verification check...');
+        await updatePendingCertificates();
+      } catch (err) {
+        console.error('Error in regular certificate check:', err);
+      }
+    }, 5 * 60 * 1000); // Every 5 minutes
+
+    // 6. Start server
     app.listen(PORT, () => {
       console.log(`🗄️  Database host: ${process.env.MONGODB_URI?.split('@').pop() || 'localhost'}`);
       console.log(`📡 Blockchain node: ${process.env.PROVIDER_URL}`);

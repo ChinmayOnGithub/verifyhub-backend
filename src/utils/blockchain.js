@@ -2,6 +2,9 @@ import Web3 from 'web3';
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
+import { sendConfirmedCertificateEmails, sendCertificateEmail, getAppBaseUrl } from './emailUtils.js';
+import { PINATA_GATEWAY_BASE_URL } from '../constants.js';
+import Certificate from '../models/certificate.model.js';
 
 dotenv.config();
 
@@ -142,6 +145,8 @@ initializeBlockchain().catch(err => {
  * Sets up a certificate verification system
  * Uses polling instead of subscriptions for maximum compatibility
  */
+let blockchainIntervals = []; // Track blockchain-specific intervals
+
 export const startCertificateConfirmationListener = async () => {
   try {
     if (!isInitialized || !contract) {
@@ -176,7 +181,7 @@ export const startCertificateConfirmationListener = async () => {
     // Set up polling instead of subscriptions
     console.log('Setting up polling-based verification (no subscriptions required)');
 
-    // Setup interval for periodic checks (every 2 minutes)
+    // Setup interval for periodic checks (every 30 seconds)
     const interval = setInterval(async () => {
       try {
         const count = await checkAndUpdateCertificates(Certificate);
@@ -184,13 +189,10 @@ export const startCertificateConfirmationListener = async () => {
       } catch (err) {
         console.error('Error in periodic certificate check:', err.message);
       }
-    }, 2 * 60 * 1000); // Every 2 minutes
+    }, 30 * 1000); // Every 30 seconds (changed from 2 minutes)
 
-    // Make sure interval is cleaned up if app shuts down
-    process.on('SIGINT', () => {
-      clearInterval(interval);
-      console.log('Certificate verification polling stopped');
-    });
+    // Track this interval
+    blockchainIntervals.push(interval);
 
     // Initial check
     setTimeout(async () => {
@@ -230,7 +232,7 @@ async function checkAndUpdateCertificates(Certificate, limit = null) {
     console.log(`Found ${pendingCertificates.length} pending certificates to check`);
 
     if (pendingCertificates.length === 0) {
-      return { updated: 0, failed: 0 };
+      return { updated: 0, failed: 0, emailsSent: 0 };
     }
 
     // Get available methods
@@ -238,6 +240,7 @@ async function checkAndUpdateCertificates(Certificate, limit = null) {
 
     let updatedCount = 0;
     let failedCount = 0;
+    let confirmedCertificates = []; // Track confirmed certificates for email sending
 
     for (const cert of pendingCertificates) {
       try {
@@ -266,6 +269,10 @@ async function checkAndUpdateCertificates(Certificate, limit = null) {
               );
               updatedCount++;
               console.log(`✅ Certificate ${cert.certificateId} confirmed via transaction receipt`);
+
+              // Add to list of confirmed certificates for email sending
+              confirmedCertificates.push(cert);
+
               continue; // Skip to next cert
             }
           } catch (err) {
@@ -326,6 +333,9 @@ async function checkAndUpdateCertificates(Certificate, limit = null) {
           );
           updatedCount++;
           console.log(`✅ Certificate ${cert.certificateId} verified and updated to CONFIRMED`);
+
+          // Add to list of confirmed certificates for email sending
+          confirmedCertificates.push(cert);
         } else {
           // Mark as FAILED if older than 15 minutes
           const fifteenMinutesAgo = new Date(Date.now() - (15 * 60 * 1000));
@@ -348,45 +358,242 @@ async function checkAndUpdateCertificates(Certificate, limit = null) {
       }
     }
 
-    return { updated: updatedCount, failed: failedCount };
+    // Send confirmation emails for newly confirmed certificates
+    let emailResults = { sent: 0, failed: 0, skipped: 0 };
+
+    if (confirmedCertificates.length > 0) {
+      console.log(`Sending confirmation emails for ${confirmedCertificates.length} certificates...`);
+
+      try {
+        emailResults = await sendConfirmedCertificateEmails(confirmedCertificates);
+
+        // Mark certificates as having emails sent
+        for (const cert of confirmedCertificates) {
+          if (emailResults.details.find(detail =>
+            detail.certificateId === cert.certificateId && detail.status === 'sent')) {
+
+            await Certificate.updateOne(
+              { _id: cert._id },
+              {
+                $set: {
+                  emailSent: true,
+                  emailSentAt: new Date()
+                }
+              }
+            );
+          }
+        }
+      } catch (emailError) {
+        console.error('Error sending confirmation emails:', emailError);
+      }
+    }
+
+    return {
+      updated: updatedCount,
+      failed: failedCount,
+      emailsSent: emailResults.sent
+    };
   } catch (error) {
     console.error('Error in certificate checking:', error.message);
-    return { updated: 0, failed: 0 };
+    return { updated: 0, failed: 0, emailsSent: 0 };
   }
 }
 
 // Simplified version that uses the shared helper function
 export const updatePendingCertificates = async (limit = null) => {
   try {
-    if (!isInitialized || !contract) {
-      console.error('Cannot update pending certificates: Blockchain not initialized');
-      return false;
+    // Fetch pending certificates (status: 'pending')
+    const query = { status: 'pending', emailSent: { $ne: true } };
+
+    // Apply limit if provided, otherwise check all pending
+    const pendingCertificates = limit
+      ? await Certificate.find(query).sort({ createdAt: -1 }).limit(limit)
+      : await Certificate.find(query);
+
+    if (pendingCertificates.length === 0) {
+      return { updated: 0, message: 'No pending certificates found' };
     }
 
-    // Import mongoose models safely
-    let Certificate;
+    console.log(`Found ${pendingCertificates.length} pending certificates to check`);
+
+    // Use the getContract function to get the current contract instance
     try {
-      const mongoose = await import('../models/certificate.model.js');
-      Certificate = mongoose.default || mongoose.Certificate;
+      const contractInstance = getContract();
+      let updatedCount = 0;
 
-      if (!Certificate) {
-        throw new Error('Certificate model not found');
+      // Check each pending certificate
+      for (const certificate of pendingCertificates) {
+        try {
+          // Get certificate ID to check on blockchain
+          const certId = certificate.certificateId;
+
+          // Call the contract to check if the certificate exists using one of our verification methods
+          let verified = false;
+
+          try {
+            // First try isVerified if available
+            verified = await contractInstance.methods.isVerified(certId).call();
+          } catch (methodError) {
+            try {
+              // Then try getCertificate (this will throw an error if cert doesn't exist)
+              await contractInstance.methods.getCertificate(certId).call();
+              verified = true;
+            } catch (getCertError) {
+              // Certificate not verified - skip to next error handler
+              console.log(`Certificate ${certId} verification failed`);
+            }
+          }
+
+          if (verified) {
+            // Update certificate status to 'confirmed'
+            certificate.status = 'CONFIRMED';
+            certificate.verifiedAt = new Date();
+
+            // Send email notification if recipient email is provided
+            if (certificate.recipientEmail) {
+              try {
+                // Generate IPFS gateway URL for the certificate
+                const certificateLink = `${PINATA_GATEWAY_BASE_URL}/${certificate.ipfsHash}`;
+
+                // Create verification URL using the getAppBaseUrl function
+                const baseUrl = getAppBaseUrl().replace(':3000', ':5173');
+                const verificationUrl = `${baseUrl}/verify?code=${certificate.verificationCode || ''}&auto=true`;
+
+                // Prepare additional certificate information
+                const additionalInfo = {
+                  certificateId: certificate.certificateId,
+                  institutionName: certificate.institutionName,
+                  issuedDate: certificate.issuedDate,
+                  expiryDate: certificate.validUntil
+                };
+
+                await sendCertificateEmail(
+                  certificate.recipientEmail,
+                  certificate.candidateName,
+                  certificate.courseName,
+                  certificateLink,
+                  verificationUrl,
+                  additionalInfo
+                );
+
+                certificate.emailSent = true;
+                console.log(`✅ Confirmation email sent for certificate ${certificate._id}`);
+              } catch (emailError) {
+                console.error(`Failed to send confirmation email for certificate ${certificate._id}:`, emailError);
+              }
+            }
+
+            await certificate.save();
+            updatedCount++;
+            console.log(`Certificate ${certificate._id} status updated to confirmed`);
+          }
+        } catch (certError) {
+          console.error(`Error checking certificate ${certificate._id}:`, certError);
+        }
       }
-    } catch (modelError) {
-      console.error('⛔ Error loading Certificate model:', modelError.message);
-      return false;
+
+      return {
+        updated: updatedCount,
+        message: `${updatedCount} certificates updated to confirmed status`
+      };
+    } catch (contractError) {
+      console.error('Failed to get contract instance:', contractError);
+      return { updated: 0, message: 'Failed to get contract instance' };
+    }
+  } catch (error) {
+    console.error('Error updating pending certificates:', error);
+    throw error;
+  }
+};
+
+// Add this function to specifically handle confirmed certificates that need email
+/**
+ * Sends emails for recently confirmed certificates that haven't had emails sent
+ * Industry best practice is to separate the email sending logic from verification
+ * This allows for better error handling and retry mechanisms
+ */
+export const sendEmailsForConfirmedCertificates = async () => {
+  try {
+    // Find all CONFIRMED certificates that haven't had emails sent
+    const confirmedCertificates = await Certificate.find({
+      status: 'CONFIRMED',
+      emailSent: { $ne: true },
+      recipientEmail: { $exists: true, $ne: null }
+    }).sort({ updatedAt: -1 });
+
+    console.log(`Found ${confirmedCertificates.length} confirmed certificates needing email notifications`);
+
+    if (confirmedCertificates.length === 0) {
+      return { sent: 0, message: 'No confirmed certificates needing emails' };
     }
 
-    console.log('Checking for pending certificates that need status update...');
+    // Send emails
+    const emailResults = await sendConfirmedCertificateEmails(confirmedCertificates);
 
-    // Use the shared helper function
-    const results = await checkAndUpdateCertificates(Certificate, limit);
+    // Mark certificates as having emails sent
+    for (const cert of confirmedCertificates) {
+      if (emailResults.details.find(detail =>
+        detail.certificateId === cert.certificateId && detail.status === 'sent')) {
 
-    console.log(`Updated ${results.updated} certificates to CONFIRMED status and ${results.failed} to FAILED status`);
+        await Certificate.updateOne(
+          { _id: cert._id },
+          {
+            $set: {
+              emailSent: true,
+              emailSentAt: new Date()
+            }
+          }
+        );
+      }
+    }
+
+    console.log(`Email sending complete: ${emailResults.sent} sent, ${emailResults.failed} failed`);
+    return {
+      sent: emailResults.sent,
+      failed: emailResults.failed,
+      skipped: emailResults.skipped,
+      message: `${emailResults.sent} confirmation emails sent`
+    };
+  } catch (error) {
+    console.error('Error sending emails for confirmed certificates:', error);
+    return {
+      sent: 0,
+      failed: 0,
+      error: error.message,
+      message: 'Failed to send confirmation emails'
+    };
+  }
+};
+
+/**
+ * Clean up all blockchain-related resources
+ * This should be called when shutting down the application
+ */
+export const cleanupBlockchainResources = () => {
+  try {
+    // Clear all blockchain intervals
+    blockchainIntervals.forEach(interval => {
+      clearInterval(interval);
+    });
+    blockchainIntervals = [];
+
+    // Disconnect Web3 if needed - properly check provider type
+    if (web3 && web3.currentProvider) {
+      // Only WebSocket and IPC providers have disconnect methods
+      // HTTP providers don't need/have disconnect
+      if (web3.currentProvider.constructor.name === 'WebsocketProvider' ||
+        web3.currentProvider.constructor.name === 'IpcProvider') {
+        if (typeof web3.currentProvider.disconnect === 'function') {
+          web3.currentProvider.disconnect();
+        }
+      }
+      // For HTTP providers (most common), no disconnect needed
+    }
+
+    console.log('Blockchain resources cleaned up successfully');
     return true;
   } catch (error) {
-    console.error('Failed to update pending certificates:', error.message);
-    // Don't crash the app
+    console.error('Error cleaning up blockchain resources:', error);
     return false;
   }
 };

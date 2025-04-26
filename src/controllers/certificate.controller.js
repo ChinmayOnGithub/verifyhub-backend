@@ -396,7 +396,7 @@ export const generateCertificate = async (req, res) => {
 
     // Get certificate type (default to ACHIEVEMENT if not specified)
     const validCertTypes = ["ACHIEVEMENT", "COMPLETION", "PARTICIPATION"];
-    let certificateType = (req.body.certificateType || "").toUpperCase();
+    let certificateType = (req.body.certificateType || "ACHIEVEMENT").toUpperCase();
     if (!validCertTypes.includes(certificateType)) {
       certificateType = "ACHIEVEMENT";
     }
@@ -544,38 +544,10 @@ export const generateCertificate = async (req, res) => {
 
     console.log(`[${generationId}] Certificate generated successfully in ${processingTime}s`);
 
-    // Send email to recipient if email was provided
+    // No immediate email sending - will be sent after blockchain confirmation
     let emailSent = false;
     if (recipientEmail) {
-      try {
-        // Create frontend verification URL
-        const baseUrl = `${req.protocol}://${req.get('host')}`.replace(':3000', ':5173');
-        const verificationUrl = `${baseUrl}/verify?code=${verificationCode}&auto=true`;
-
-        // Generate IPFS gateway URL for the certificate
-        const pdfUrl = `${PINATA_GATEWAY_BASE_URL}/${ipfsData.ipfsHash}`;
-
-        // Send email with certificate links
-        const emailResult = await sendCertificateEmail(
-          recipientEmail,
-          candidateName,
-          courseName,
-          pdfUrl,
-          verificationUrl
-        );
-
-        emailSent = emailResult.success;
-
-        if (emailSent) {
-          console.log(`[${generationId}] Certificate email sent successfully to ${recipientEmail}`);
-        } else {
-          console.error(`[${generationId}] Failed to send certificate email: ${emailResult.error}`);
-        }
-      } catch (emailError) {
-        console.error(`[${generationId}] Email sending error:`, emailError);
-        // Don't fail the whole request if email fails
-        emailSent = false;
-      }
+      console.log(`[${generationId}] Recipient email ${recipientEmail} stored for verification email after confirmation`);
     }
 
     // Return success response
@@ -803,38 +775,10 @@ export const uploadExternalCertificate = async (req, res) => {
 
       console.log(`[${uploadId}] External certificate saved to database with ID: ${newCertificate._id}`);
 
-      // Send email to recipient if email was provided
+      // No immediate email sending - will be sent after blockchain confirmation
       let emailSent = false;
       if (recipientEmail) {
-        try {
-          // Create frontend verification URL
-          const baseUrl = `${req.protocol}://${req.get('host')}`.replace(':3000', ':5173');
-          const verificationUrl = `${baseUrl}/verify?code=${shortCode}&auto=true`;
-
-          // Generate IPFS gateway URL for the certificate
-          const pdfUrl = `${PINATA_GATEWAY_BASE_URL}/ipfs/${hashData.ipfsHash}`;
-
-          // Send email with certificate links
-          const emailResult = await sendCertificateEmail(
-            recipientEmail,
-            candidateName,
-            courseName || 'External Certificate',
-            pdfUrl,
-            verificationUrl
-          );
-
-          emailSent = emailResult.success;
-
-          if (emailSent) {
-            console.log(`[${uploadId}] Certificate email sent successfully to ${recipientEmail}`);
-          } else {
-            console.error(`[${uploadId}] Failed to send certificate email: ${emailResult.error}`);
-          }
-        } catch (emailError) {
-          console.error(`[${uploadId}] Email sending error:`, emailError);
-          // Don't fail the whole request if email fails
-          emailSent = false;
-        }
+        console.log(`[${uploadId}] Recipient email ${recipientEmail} stored for verification email after confirmation`);
       }
 
       // Step 7: Return success response

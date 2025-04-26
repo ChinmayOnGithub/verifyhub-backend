@@ -17,6 +17,8 @@
 11. [PDF Verification System](#10-pdf-verification-issues-and-solutions)
 12. [Certificate Source Management](#11-certificate-source-identification)
 13. [Multi-Hash Verification System](#12-multi-hash-verification-system)
+14. [Certificate Verification Process](#13-certificate-verification-process)
+15. [Email Notification System](#14-email-notification-system)
 
 ## Project Setup
 
@@ -1013,3 +1015,150 @@ We implemented a robust verification system that:
 2. **Hash Migration**: Add tools to update old certificates with new hash formats
 3. **Hash Validation**: Add validation to ensure stored hashes are in correct format
 4. **Performance Optimization**: Add indexes for hash fields to improve search speed
+
+## 13. Certificate Verification Process
+
+### Certificate Status Lifecycle
+
+The system implements a state-based certificate verification process:
+
+1. **PENDING** → Initial state when certificate is generated
+2. **CONFIRMED** → Certificate verified on blockchain
+3. **FAILED** → Certificate verification timeout (15+ minutes in PENDING)
+
+### Blockchain Polling Mechanism
+
+The system uses a polling mechanism to verify certificates on the blockchain:
+
+- **Why Polling?**
+
+  - More reliable than event subscriptions across different blockchain providers
+  - Works with any Ethereum-compatible blockchain
+  - Handles network interruptions gracefully
+  - Ensures no certificates are missed due to event subscription failures
+
+- **Polling Schedule:**
+
+  - Every 30 seconds for blockchain status checks
+  - Every 30 seconds for quick certificate checks (first 10 minutes)
+  - Every 1 minute for comprehensive verification
+
+- **Verification Methods:**
+  - Transaction receipt verification (fastest)
+  - Smart contract method calls (multiple fallbacks)
+  - Smart contract event monitoring (optional)
+
+### Implementation Details
+
+```javascript
+// blockchain.js
+const interval = setInterval(async () => {
+  try {
+    const count = await checkAndUpdateCertificates(Certificate);
+    console.log(
+      `Periodic check complete: ${count.updated} certificates updated`,
+    );
+  } catch (err) {
+    console.error("Error in periodic certificate check:", err.message);
+  }
+}, 30 * 1000); // Every 30 seconds
+```
+
+### Recovery and Resilience
+
+- Automatic recovery from blockchain connection issues
+- Status preserved across system restarts
+- Database as source of truth for certificate status
+- Graceful handling of contract method failures
+
+## 14. Email Notification System
+
+### Automatic Email Notifications
+
+The system automatically sends email notifications when certificates are verified on the blockchain:
+
+- **Notification Triggers:**
+
+  1. When certificate transitions from PENDING to CONFIRMED
+  2. When system detects CONFIRMED certificates without sent emails
+  3. On system startup for any missing notifications
+
+- **Email Content:**
+  - Personalized greeting with recipient name
+  - Certificate details (course, institution, dates)
+  - Direct link to view/download certificate PDF
+  - Verification link to validate authenticity
+  - QR code for mobile verification
+
+### Email Status Tracking
+
+Every certificate tracks its email notification status:
+
+```javascript
+// Certificate model
+{
+  // ... other certificate fields
+  emailSent: Boolean,       // Whether email has been sent
+  emailSentAt: Date,        // When email was sent
+  recipientEmail: String,   // Email recipient
+}
+```
+
+### Email Sending Process
+
+```javascript
+// Dedicated function for email processing
+export const sendEmailsForConfirmedCertificates = async () => {
+  try {
+    // Find all CONFIRMED certificates without emails sent
+    const confirmedCertificates = await Certificate.find({
+      status: "CONFIRMED",
+      emailSent: { $ne: true },
+      recipientEmail: { $exists: true, $ne: null },
+    });
+
+    // Send emails and track results
+    const emailResults = await sendConfirmedCertificateEmails(
+      confirmedCertificates,
+    );
+
+    // Update database with email status
+    for (const cert of confirmedCertificates) {
+      if (
+        emailResults.details.find(
+          (detail) =>
+            detail.certificateId === cert.certificateId &&
+            detail.status === "sent",
+        )
+      ) {
+        await Certificate.updateOne(
+          { _id: cert._id },
+          { $set: { emailSent: true, emailSentAt: new Date() } },
+        );
+      }
+    }
+
+    return {
+      sent: emailResults.sent,
+      failed: emailResults.failed,
+      skipped: emailResults.skipped,
+    };
+  } catch (error) {
+    console.error("Error sending emails:", error);
+    return { sent: 0, failed: 0, error: error.message };
+  }
+};
+```
+
+### Configuration
+
+Email settings are configured via environment variables:
+
+```
+# Email Configuration
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USER=your-email@gmail.com
+EMAIL_PASSWORD=your-app-password
+EMAIL_FROM=Your Name <your-email@gmail.com>
+```

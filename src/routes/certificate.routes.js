@@ -18,7 +18,7 @@ import {
   getCertificatesByEmail
 } from '../controllers/certificate.controller.js';
 
-// Import from the new verification controller
+// Import from the verification controller
 import {
   verifyCertificateByShortCode,
   verifyInstitutionalSignature

@@ -290,7 +290,8 @@ Content-Type: application/json
     "blockchainTxId": "0x1d3e...",
     "cryptographicSignature": "a1b2c3d4e5f6...",
     "ipfsHash": "QmTQ6ieE6zdfCU2RSHG9DDELAtSACKtrf4C4PpjmGyZnWd",
-    "emailSent": true,
+    "status": "PENDING",
+    "emailSent": false,
     "additionalFields": {
       "grade": "A+",
       "credits": 120
@@ -394,6 +395,7 @@ Verify multiple certificates in a single request.
 
 ```http
 POST /certificates/verify/bulk
+Content-Type: application/json
 ```
 
 **Request Body:**
@@ -750,3 +752,239 @@ Authorization: Bearer <token>
 | `BLOCKCHAIN_ERROR`         | 500         | Blockchain operation failed      |
 | `IPFS_ERROR`               | 500         | IPFS operation failed            |
 | `VERIFICATION_FAILED`      | 500         | Certificate verification failed  |
+
+## Certificate Lifecycle and Verification Process
+
+### Certificate Status Flow
+
+All certificates in the system follow a defined lifecycle:
+
+1. **PENDING**: Initial state when certificate is first generated
+
+   - Certificate is stored in database
+   - PDF is generated and uploaded to IPFS
+   - Certificate information is submitted to blockchain
+
+2. **CONFIRMED**: Certificate is verified on the blockchain
+
+   - System automatically polls the blockchain every 30 seconds
+   - When transaction is confirmed, status is updated to CONFIRMED
+   - Email notification is sent to recipient (if email provided)
+
+3. **FAILED**: Certificate verification failed
+   - If a PENDING certificate remains unverified after 15 minutes
+
+### Blockchain Verification Process
+
+The system implements a multi-layered verification process:
+
+- **Transaction Receipt Verification**: Checks if the blockchain transaction is confirmed
+- **Smart Contract Verification**: Uses multiple methods to check certificate existence:
+  - `isVerified(certificateId)`: Direct verification method
+  - `getCertificate(certificateId)`: Retrieves certificate data
+  - `getCertificateDetails(certificateId)`: Retrieves detailed certificate information
+
+### Email Notification System
+
+The system automatically sends email notifications when certificates are confirmed on the blockchain:
+
+#### Certificate Email Process
+
+1. **Triggering**: Emails are automatically sent when:
+
+   - A certificate transitions from PENDING to CONFIRMED status
+   - A previously CONFIRMED certificate is found without email sent flag
+
+2. **Polling Schedule**:
+
+   - Every 30 seconds for first 10 minutes after certificate generation (20 checks)
+   - Every 1 minute for ongoing verification and email sending
+   - Immediate check on startup for any certificates needing emails
+
+3. **Email Content**:
+   - Personalized notification to the certificate recipient
+   - Direct link to view the certificate PDF
+   - Verification link to validate certificate authenticity
+   - Certificate details (institution, course, issuance date)
+
+#### Email Status Tracking
+
+- `emailSent` flag in database tracks whether notification has been sent
+- `emailSentAt` timestamp records when the email was delivered
+- System ensures emails are only sent once per certificate
+
+### Verification and Email Testing Endpoints
+
+#### Test Email Sending
+
+```http
+POST /admin/send-confirmed-emails
+Authorization: Bearer <token>
+```
+
+**Description**: Manually triggers the email sending process for testing purposes. This will find all CONFIRMED certificates that haven't had emails sent and process them.
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Email sending process initiated",
+  "result": {
+    "sent": 5,
+    "failed": 0,
+    "skipped": 0,
+    "message": "5 confirmation emails sent"
+  }
+}
+```
+
+#### Send Test Email
+
+```http
+POST /email/test
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+**Request Body:**
+
+```json
+{
+  "email": "recipient@example.com"
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Test email sent successfully",
+  "messageId": "abc123def456@smtp.gmail.com"
+}
+```
+
+**Error Response:**
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "SMTP_ERROR",
+    "message": "Failed to connect to email server",
+    "details": "Connection refused"
+  }
+}
+```
+
+#### Check Certificate Status
+
+```http
+GET /certificates/:certificateId/status
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "certificate": {
+    "certificateId": "8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1",
+    "status": "CONFIRMED",
+    "verificationCode": "ABCD",
+    "emailSent": true,
+    "emailSentAt": "2023-06-15T15:30:45.123Z",
+    "verifiedAt": "2023-06-15T15:25:30.000Z",
+    "blockchainTxId": "0x1d3e..."
+  }
+}
+```
+
+#### Get Certificate by ID
+
+```http
+GET /certificates/:certificateId
+Authorization: Bearer <token>
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "certificate": {
+    "certificateId": "8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1",
+    "referenceId": "STUD2023001",
+    "candidateName": "John Doe",
+    "courseName": "Advanced Computer Science",
+    "institutionName": "Tech University",
+    "issuedDate": "2023-06-15T15:30:45.123Z",
+    "status": "CONFIRMED",
+    "blockchainTxId": "0x1d3e...",
+    "ipfsHash": "QmTQ6ieE6zdfCU2RSHG9DDELAtSACKtrf4C4PpjmGyZnWd",
+    "emailSent": true,
+    "emailSentAt": "2023-06-15T15:45:30.000Z",
+    "verificationCode": "ABCD",
+    "_links": {
+      "pdf": "https://gateway.pinata.cloud/ipfs/QmTQ6ieE6zdfCU2RSHG9DDELAtSACKtrf4C4PpjmGyZnWd",
+      "verify": "/api/certificates/8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1/verify"
+    }
+  }
+}
+```
+
+### 3. Email Notification API
+
+#### 3.1 Resend Certificate Email
+
+```http
+POST /certificates/:certificateId/resend-email
+Authorization: Bearer <token>
+```
+
+**Description**: Manually triggers resending of a certificate email notification.
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Certificate email resent successfully",
+  "details": {
+    "certificateId": "8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1",
+    "recipient": "john@example.com",
+    "messageId": "abc123def456@smtp.gmail.com"
+  }
+}
+```
+
+#### 3.2 Update Recipient Email
+
+```http
+PATCH /certificates/:certificateId/recipient-email
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+**Request Body:**
+
+```json
+{
+  "email": "newemail@example.com"
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Recipient email updated successfully",
+  "certificate": {
+    "certificateId": "8562cb084288d618a070a7027e1483eb41cba91c44e3960525aa6cbbecc979e1",
+    "recipientEmail": "newemail@example.com",
+    "emailSent": false
+  }
+}
+```

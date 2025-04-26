@@ -27,6 +27,11 @@ const CertificateSchema = new mongoose.Schema(
       enum: ['PENDING', 'CONFIRMED', 'FAILED'],
       default: 'PENDING'
     },
+    emailSent: {
+      type: Boolean,
+      default: false
+    },
+    emailSentAt: { type: Date },
     source: {
       type: String,
       enum: ['internal', 'external'],

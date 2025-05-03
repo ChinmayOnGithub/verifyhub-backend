@@ -51,6 +51,7 @@ import {
 import { errorResponse, ErrorCodes } from '../utils/errorUtils.js';
 import { uploadBufferToPinata } from '../utils/pinata.js';
 import { sendCertificateEmail } from '../utils/emailUtils.js';
+import { estimateCost } from '../utils/ether.js'  // make sure this is at the top of the file
 
 BigInt.prototype.toJSON = function () { return this.toString(); };
 const BLOCK_EXPLORER_URL = 'http://localhost:8545'
@@ -458,14 +459,86 @@ export const generateCertificate = async (req, res) => {
     // 6. Blockchain Registration
     // ======================
     let tx = null; // Initialize tx variable outside the try-catch block
+    // try {
+    //   // Get the initialized instances
+    //   const contractInstance = getContract();
+    //   const web3Instance = getWeb3();
+
+    //   const accounts = await web3Instance.eth.getAccounts();
+    //   console.log(`[${generationId}] Using account for transaction: ${accounts[0]}`);
+
+    //   tx = await contractInstance.methods
+    //     .generateCertificate(
+    //       certificateId,
+    //       metadata.referenceId,
+    //       candidateName,
+    //       courseName,
+    //       metadata.institutionName,
+    //       additionalMetadata.issuedDate,
+    //       additionalMetadata.institutionLogo,
+    //       additionalMetadata.generationDate,
+    //       "pending", // Placeholder for blockchainTxId, will be updated
+    //       additionalMetadata.cryptographicSignature,
+    //       ipfsData.ipfsHash
+    //     )
+    //     .send({ from: accounts[0], gas: 1000000 });
+
+    //   certificateData.blockchainTx = tx.transactionHash;
+    //   certificateData.blockchainTxId = tx.transactionHash;
+    //   certificateData.blockNumber = tx.blockNumber;
+    // } catch (blockchainError) {
+    //   console.error(`[${generationId}] Blockchain registration failed:`, blockchainError);
+    //   return res.status(500).json({
+    //     error: {
+    //       code: 'BLOCKCHAIN_REGISTRATION_FAILED',
+    //       message: 'Failed to register certificate on blockchain',
+    //       details: blockchainError.message
+    //     },
+    //     meta: certificateData
+    //   });
+    // }
+
     try {
-      // Get the initialized instances
+      // Get initialized web3 + contract
       const contractInstance = getContract();
       const web3Instance = getWeb3();
 
+      // Pick your issuing account
       const accounts = await web3Instance.eth.getAccounts();
       console.log(`[${generationId}] Using account for transaction: ${accounts[0]}`);
 
+      // ─── A) Build the “dry” request for estimation ─────────────────────────────
+      const txRequest = {
+        to: contractInstance.options.address,
+        data: contractInstance.methods
+          .generateCertificate(
+            certificateId,
+            metadata.referenceId,
+            candidateName,
+            courseName,
+            metadata.institutionName,
+            additionalMetadata.issuedDate,
+            additionalMetadata.institutionLogo,
+            additionalMetadata.generationDate,
+            "pending",                        // placeholder for blockchainTxId
+            additionalMetadata.cryptographicSignature,
+            ipfsData.ipfsHash
+          )
+          .encodeABI(),
+        // value: 0,                       // omit or include if you ever send ETH
+        // you can also override maxFeePerGas/maxPriorityFeePerGas here
+      };
+
+      // ─── B) Estimate & log gas + cost ──────────────────────────────────────────
+      const cost = await estimateCost(txRequest);
+      console.log(
+        `[${generationId}] Estimated gas: ${cost.gasLimit} units`
+      );
+      console.log(
+        `[${generationId}] Estimated cost: ${cost.costEth.toFixed(6)} ETH ≃ ₹${cost.costInr.toFixed(2)}`
+      );
+
+      // ─── C) Now actually sign & send the transaction ───────────────────────────
       tx = await contractInstance.methods
         .generateCertificate(
           certificateId,
@@ -476,15 +549,17 @@ export const generateCertificate = async (req, res) => {
           additionalMetadata.issuedDate,
           additionalMetadata.institutionLogo,
           additionalMetadata.generationDate,
-          "pending", // Placeholder for blockchainTxId, will be updated
+          "pending",
           additionalMetadata.cryptographicSignature,
           ipfsData.ipfsHash
         )
         .send({ from: accounts[0], gas: 1000000 });
 
+      // Update your local data with the real tx info
       certificateData.blockchainTx = tx.transactionHash;
       certificateData.blockchainTxId = tx.transactionHash;
       certificateData.blockNumber = tx.blockNumber;
+
     } catch (blockchainError) {
       console.error(`[${generationId}] Blockchain registration failed:`, blockchainError);
       return res.status(500).json({

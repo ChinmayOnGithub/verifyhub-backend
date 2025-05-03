@@ -24,7 +24,7 @@ const CertificateSchema = new mongoose.Schema(
     blockchainTx: { type: String },
     status: {
       type: String,
-      enum: ['PENDING', 'CONFIRMED', 'FAILED'],
+      enum: ['PENDING', 'VERIFIED', 'FAILED'],
       default: 'PENDING'
     },
     emailSent: {

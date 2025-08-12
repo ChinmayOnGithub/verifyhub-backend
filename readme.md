@@ -86,6 +86,29 @@ truffle run verify Certification --network <network-name> --config truffle-confi
      }
    }
    ```
+4. Works on Linux, fails on Windows
+
+```
+Windows’ Git by default converts LF to CRLF, breaking shell scripts.
+
+Volume mounts behave differently — paths and permissions can break.
+
+How to fix this
+1️⃣ Fix shell script line endings
+Run this in your project root:
+
+powershell
+Copy
+Edit
+git config core.autocrlf false
+Then convert scripts:
+
+powershell
+Copy
+Edit
+dos2unix wait-for-it.sh entrypoint.sh
+If you don’t have dos2unix on Windows, open the files in VS Code → bottom right corner → change CRLF to LF → save.
+```
 
 ### Network Configuration
 

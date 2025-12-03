@@ -52,11 +52,15 @@ export const register = async (req, res) => {
         userFields.publicKey = publicKey;
         userFields.privateKey = privateKey;
         userFields.walletAddress = walletAddress;
+        
+        // Set institutionName to the name field for INSTITUTE users
+        userFields.institutionName = name;
 
         console.log(`[${requestId}] Cryptographic keys generated successfully:`);
         console.log(`[${requestId}] - Wallet address: ${walletAddress}`);
         console.log(`[${requestId}] - Public key length: ${publicKey.length} chars`);
         console.log(`[${requestId}] - Private key length: ${privateKey.length} chars`);
+        console.log(`[${requestId}] - Institution name: ${name}`);
       } catch (keyError) {
         console.error(`[${requestId}] Error generating keys:`, keyError);
         // Continue with registration without keys if generation fails

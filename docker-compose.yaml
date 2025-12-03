@@ -1,6 +1,7 @@
 # version: "3.8"
 
 services:
+  # Ganache - Local Ethereum blockchain
   ganache:
     image: trufflesuite/ganache:latest
     container_name: ganache
@@ -16,7 +17,23 @@ services:
       - blockchain_data:/app/db
     networks:
       - verifyhub-net
+    restart: unless-stopped
 
+  # MongoDB - Database
+  mongodb:
+    image: mongo:7.0
+    container_name: verifyhub-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=verifyhub
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - verifyhub-net
+    restart: unless-stopped
+
+  # Truffle - Smart contract deployment (optional)
   truffle:
     build:
       context: .
@@ -31,9 +48,12 @@ services:
       - blockchain_data:/app/db
     networks:
       - verifyhub-net
+    profiles:
+      - deploy
 
 volumes:
   blockchain_data:
+  mongodb_data:
 
 networks:
   verifyhub-net:

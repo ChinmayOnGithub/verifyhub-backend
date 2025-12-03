@@ -22,6 +22,8 @@
 
 
 // src/index.js
+import { createServer } from 'http';
+import { Server } from 'socket.io';
 import app from './app.js';
 import dotenv from 'dotenv';
 import {
@@ -35,6 +37,27 @@ import {
 import connectDB from './db/mongoose.js';
 
 dotenv.config();
+
+// Create HTTP server and Socket.IO instance
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+  cors: {
+    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    methods: ['GET', 'POST']
+  }
+});
+
+// Make io available globally
+app.set('io', io);
+
+// Socket.IO connection handling
+io.on('connection', (socket) => {
+  console.log(`🔌 Client connected: ${socket.id}`);
+  
+  socket.on('disconnect', () => {
+    console.log(`🔌 Client disconnected: ${socket.id}`);
+  });
+});
 
 const PORT = process.env.PORT || 3000;
 
@@ -128,9 +151,10 @@ const startServer = async () => {
     intervals.push(healthCheckInterval);
 
     // 6. Start server
-    const server = app.listen(PORT, () => {
+    const server = httpServer.listen(PORT, () => {
       console.log(`🗄️  Database host: ${process.env.MONGODB_URI?.split('@').pop() || 'localhost'}`);
       console.log(`📡 Blockchain node: ${process.env.PROVIDER_URL}`);
+      console.log(`🔌 WebSocket server ready`);
       console.log(`🚀 Server running on port ${PORT}`);
     });
 

@@ -82,7 +82,17 @@ const UserSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
-  accountLockUntil: Date
+  accountLockUntil: Date,
+  // Institution-specific fields
+  institutionName: {
+    type: String,
+    required: function() { return this.role === 'INSTITUTE'; },
+    trim: true
+  },
+  institutionLogo: {
+    type: String,
+    default: null
+  }
 });
 
 // Indexes

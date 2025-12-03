@@ -185,11 +185,14 @@ export const startCertificateConfirmationListener = async () => {
     const interval = setInterval(async () => {
       try {
         const count = await checkAndUpdateCertificates(Certificate);
-        console.log(`Periodic check complete: ${count.updated} certificates updated, ${count.failed} failed`);
+        // Only log if there were updates or failures
+        if (count.updated > 0 || count.failed > 0) {
+          console.log(`✅ Periodic check: ${count.updated} updated, ${count.failed} failed`);
+        }
       } catch (err) {
-        console.error('Error in periodic certificate check:', err.message);
+        console.error('❌ Error in periodic certificate check:', err.message);
       }
-    }, 30 * 1000); // Every 30 seconds (changed from 2 minutes)
+    }, 30 * 1000); // Every 30 seconds
 
     // Track this interval
     blockchainIntervals.push(interval);
@@ -229,7 +232,11 @@ async function checkAndUpdateCertificates(Certificate, limit = null) {
     }
 
     const pendingCertificates = await query;
-    console.log(`Found ${pendingCertificates.length} pending certificates to check`);
+    
+    // Only log if there are pending certificates
+    if (pendingCertificates.length > 0) {
+      console.log(`📋 Found ${pendingCertificates.length} pending certificates to check`);
+    }
 
     if (pendingCertificates.length === 0) {
       return { updated: 0, failed: 0, emailsSent: 0 };
@@ -333,6 +340,21 @@ async function checkAndUpdateCertificates(Certificate, limit = null) {
           );
           updatedCount++;
           console.log(`✅ Certificate ${cert.certificateId} verified and updated to CONFIRMED`);
+
+          // Emit Socket.IO event for real-time update
+          try {
+            const app = (await import('../app.js')).default;
+            const io = app.get('io');
+            if (io) {
+              io.emit('certificate:status', {
+                certificateId: cert.certificateId,
+                status: 'CONFIRMED',
+                timestamp: new Date()
+              });
+            }
+          } catch (err) {
+            // Silently fail if Socket.IO not available
+          }
 
           // Add to list of confirmed certificates for email sending
           confirmedCertificates.push(cert);

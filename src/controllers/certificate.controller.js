@@ -27,8 +27,6 @@ import * as pinata from '../utils/pinata.js';
 import { web3, contract, getWeb3, getContract } from '../utils/blockchain.js';
 import { PINATA_GATEWAY_BASE_URL } from '../constants.js';
 import Certificate from '../models/certificate.model.js';
-// import { extractCertificate } from '../utils/pdfReaderUtils.js';
-// import CID from 'cids';
 import { CID } from 'multiformats/cid'
 import * as Block from 'multiformats/block'
 import { sha256 } from 'multiformats/hashes/sha2'
@@ -206,7 +204,13 @@ const createInstitutionalSignature = (data, privateKey) => {
 export const generateCertificate = async (req, res) => {
   const startTime = Date.now();
   const generationId = crypto.randomBytes(8).toString('hex');
+  
+  console.log(`\n${'='.repeat(70)}`);
+  console.log(`🚀 STARTING CERTIFICATE GENERATION [${generationId}]`);
+  console.log(`${'='.repeat(70)}`);
 
+  console.log(`\n📝 [${generationId}] STEP 1/5: Preparing metadata...`);
+  
   try {
     const {
       referenceId,
@@ -219,24 +223,24 @@ export const generateCertificate = async (req, res) => {
       recipientEmail // Extract recipient email
     } = req.body;
 
-    // Determine the institution name - use the one provided or the logged-in user's org
-    // This ensures we always have an institutionName whether specified in the request or from the logged-in institute
-    const institutionName = requestInstitutionName || (req.user?.organization || '');
+    // Auto-use institution from logged-in user (production-ready approach)
+    const institutionName = req.user?.institutionName || requestInstitutionName || '';
 
     if (!institutionName) {
       return res.status(400).json({
         error: {
           code: 'MISSING_INSTITUTION',
           message: 'Institution name is required',
-          details: 'Please provide institutionName in the request or login as an institution'
+          details: 'Please update your profile with institution name'
         },
         meta: { generationId }
       });
     }
 
-    // Get institute logo from request or user profile
-    const institutionLogo = requestInstitutionLogo || (req.user?.instituteLogo || '');
-    console.log(`[${generationId}] Using institution logo: ${institutionLogo || 'Default logo'}`);
+    // Auto-use logo from logged-in user's profile
+    const institutionLogo = req.user?.institutionLogo || requestInstitutionLogo || '';
+    console.log(`[${generationId}] Institution: ${institutionName}`);
+    console.log(`[${generationId}] Using logo: ${institutionLogo || 'Default logo'}`);
 
     const metadata = {
       referenceId,
@@ -389,6 +393,8 @@ export const generateCertificate = async (req, res) => {
     // ======================
     // 4. PDF Generation
     // ======================
+    console.log(`\n📄 [${generationId}] STEP 2/4: Generating PDF...`);
+    const pdfStartTime = Date.now();
     const outputDir = path.resolve('uploads');
     const pdfFilePath = path.join(outputDir, `cert_${generationId}.pdf`);
 
@@ -423,8 +429,10 @@ export const generateCertificate = async (req, res) => {
         additionalMetadata, // Pass all additional metadata
         certificateType // Pass the certificate type
       );
+      const pdfTime = ((Date.now() - pdfStartTime) / 1000).toFixed(2);
+      console.log(`✅ [${generationId}] PDF generated in ${pdfTime}s`);
     } catch (pdfError) {
-      console.error(`[${generationId}] PDF generation failed:`, pdfError);
+      console.error(`❌ [${generationId}] PDF generation failed:`, pdfError.message);
       return res.status(500).json({
         error: {
           code: 'PDF_GENERATION_FAILED',
@@ -439,12 +447,17 @@ export const generateCertificate = async (req, res) => {
     // ======================
     // 5. IPFS Upload
     // ======================
+    console.log(`\n📤 [${generationId}] STEP 3/4: Uploading to IPFS...`);
+    const ipfsStartTime = Date.now();
     let ipfsData;
     try {
       const pdfBuffer = await fs.promises.readFile(pdfFilePath);
       ipfsData = await uploadToIPFS(pdfBuffer, `cert_${generationId}.pdf`);
+      const ipfsTime = ((Date.now() - ipfsStartTime) / 1000).toFixed(2);
+      console.log(`✅ [${generationId}] IPFS upload completed in ${ipfsTime}s`);
+      console.log(`   📦 IPFS Hash: ${ipfsData.ipfsHash}`);
     } catch (ipfsError) {
-      console.error(`[${generationId}] IPFS upload failed:`, ipfsError);
+      console.error(`❌ [${generationId}] IPFS upload failed:`, ipfsError.message);
       return res.status(500).json({
         error: {
           code: 'IPFS_UPLOAD_FAILED',
@@ -498,6 +511,9 @@ export const generateCertificate = async (req, res) => {
     //   });
     // }
 
+    console.log(`\n⛓️  [${generationId}] STEP 4/4: Registering on blockchain...`);
+    const blockchainStartTime = Date.now();
+    
     try {
       // Get initialized web3 + contract
       const contractInstance = getContract();
@@ -505,7 +521,6 @@ export const generateCertificate = async (req, res) => {
 
       // Pick your issuing account
       const accounts = await web3Instance.eth.getAccounts();
-      console.log(`[${generationId}] Using account for transaction: ${accounts[0]}`);
 
       // ─── A) Build the “dry” request for estimation ─────────────────────────────
       const txRequest = {
@@ -531,12 +546,7 @@ export const generateCertificate = async (req, res) => {
 
       // ─── B) Estimate & log gas + cost ──────────────────────────────────────────
       const cost = await estimateCost(txRequest);
-      console.log(
-        `[${generationId}] Estimated gas: ${cost.gasLimit} units`
-      );
-      console.log(
-        `[${generationId}] Estimated cost: ${cost.costEth.toFixed(6)} ETH ≃ ₹${cost.costInr.toFixed(2)}`
-      );
+      console.log(`   ⛽ Gas: ${cost.gasLimit} units | Cost: ${cost.costEth.toFixed(6)} ETH (₹${cost.costInr.toFixed(2)})`);
 
       // ─── C) Now actually sign & send the transaction ───────────────────────────
       tx = await contractInstance.methods
@@ -555,13 +565,18 @@ export const generateCertificate = async (req, res) => {
         )
         .send({ from: accounts[0], gas: 1000000 });
 
+      const blockchainTime = ((Date.now() - blockchainStartTime) / 1000).toFixed(2);
+      console.log(`✅ [${generationId}] Blockchain registration completed in ${blockchainTime}s`);
+      console.log(`   🔗 TX Hash: ${tx.transactionHash}`);
+      console.log(`   📦 Block: ${tx.blockNumber}`);
+
       // Update your local data with the real tx info
       certificateData.blockchainTx = tx.transactionHash;
       certificateData.blockchainTxId = tx.transactionHash;
       certificateData.blockNumber = tx.blockNumber;
 
     } catch (blockchainError) {
-      console.error(`[${generationId}] Blockchain registration failed:`, blockchainError);
+      console.error(`❌ [${generationId}] Blockchain registration failed:`, blockchainError.message);
       return res.status(500).json({
         error: {
           code: 'BLOCKCHAIN_REGISTRATION_FAILED',
@@ -575,6 +590,7 @@ export const generateCertificate = async (req, res) => {
     // ======================
     // 7. Database Save
     // ======================
+    console.log(`\n💾 [${generationId}] STEP 5/5: Saving to database...`);
     try {
       const newCertificate = await Certificate.create({
         certificateId,
@@ -598,9 +614,9 @@ export const generateCertificate = async (req, res) => {
         status: 'PENDING'
       });
 
-      console.log(`[${generationId}] Certificate saved to database with ID: ${newCertificate._id}`);
+      console.log(`✅ [${generationId}] Saved to database with ID: ${newCertificate._id}`);
     } catch (dbError) {
-      console.error(`[${generationId}] Database save failed:`, dbError);
+      console.error(`❌ [${generationId}] Database save failed:`, dbError.message);
       return res.status(500).json({
         error: {
           code: 'DATABASE_SAVE_FAILED',
@@ -617,7 +633,13 @@ export const generateCertificate = async (req, res) => {
     const endTime = Date.now();
     const processingTime = ((endTime - startTime) / 1000).toFixed(2);
 
-    console.log(`[${generationId}] Certificate generated successfully in ${processingTime}s`);
+    console.log(`\n${'='.repeat(70)}`);
+    console.log(`🎉 [${generationId}] CERTIFICATE GENERATED SUCCESSFULLY`);
+    console.log(`${'='.repeat(70)}`);
+    console.log(`⏱️  Total Time: ${processingTime}s`);
+    console.log(`📋 Certificate ID: ${certificateId}`);
+    console.log(`🔐 Verification Code: ${verificationCode}`);
+    console.log(`${'='.repeat(70)}\n`);
 
     // No immediate email sending - will be sent after blockchain confirmation
     let emailSent = false;

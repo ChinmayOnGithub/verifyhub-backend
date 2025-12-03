@@ -6,7 +6,18 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js --host"
+    "dev": "nodemon src/index.js --host",
+    "setup": "node scripts/setup.js",
+    "compile": "truffle compile",
+    "migrate:local": "truffle migrate --network development",
+    "migrate:sepolia": "truffle migrate --network sepolia",
+    "migrate:mumbai": "truffle migrate --network mumbai",
+    "migrate:polygon": "truffle migrate --network polygon",
+    "migrate:reset": "truffle migrate --network development --reset",
+    "test": "truffle test",
+    "console:local": "truffle console --network development",
+    "console:sepolia": "truffle console --network sepolia",
+    "console:mumbai": "truffle console --network mumbai"
   },
   "author": "Team Phoenix",
   "license": "ISC",
@@ -37,6 +48,7 @@
     "pdfkit": "^0.16.0",
     "pdfreader": "^3.0.7",
     "qrcode": "^1.5.4",
+    "socket.io": "^4.8.1",
     "uuid": "^11.1.0",
     "web3": "^4.16.0"
   }

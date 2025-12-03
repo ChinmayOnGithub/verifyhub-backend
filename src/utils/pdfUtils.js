@@ -3,6 +3,7 @@ import fs from 'fs';
 import QRCode from 'qrcode';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import axios from 'axios';
 
 // Get the directory name
 const __filename = fileURLToPath(import.meta.url);
@@ -44,6 +45,18 @@ const generateQRCodeDataURL = async (text) => {
     });
   } catch (error) {
     console.error('Error generating QR code data URL:', error);
+    return null;
+  }
+};
+
+// Function to download image from URL
+const downloadImageFromURL = async (url, outputPath) => {
+  try {
+    const response = await axios.get(url, { responseType: 'arraybuffer' });
+    fs.writeFileSync(outputPath, response.data);
+    return outputPath;
+  } catch (error) {
+    console.error('Error downloading image from URL:', error);
     return null;
   }
 };
@@ -115,377 +128,390 @@ export const generateCertificatePdf = async (
       const stream = fs.createWriteStream(outputPath);
       doc.pipe(stream);
 
-      // ==================== OPTIMIZED SINGLE PAGE CERTIFICATE ====================
+      // ==================== PROFESSIONAL CERTIFICATE DESIGN ====================
 
-      // Enhanced background with subtle gradient effect
+      // Accent color based on certificate type
+      let accentColor = '#f59e0b'; // Gold/amber for achievement
+      let secondaryColor = '#fbbf24'; // Lighter gold
+      if (certificateType === 'COMPLETION') {
+        accentColor = '#0891b2'; // Teal/cyan for completion
+        secondaryColor = '#06b6d4';
+      } else if (certificateType === 'PARTICIPATION') {
+        accentColor = '#059669'; // Green for participation
+        secondaryColor = '#10b981';
+      }
+
+      // Background - clean white
       doc.rect(0, 0, doc.page.width, doc.page.height)
-        .fillColor('#f9f9f9')
+        .fillColor('#ffffff')
         .fill();
 
-      // Add subtle decorative element - a colored bar at the top and bottom
-      const barHeight = 15;
-      doc.rect(0, 0, doc.page.width, barHeight)
-        .fillColor('#1a365d')
-        .fill();
-      doc.rect(0, doc.page.height - barHeight, doc.page.width, barHeight)
-        .fillColor('#1a365d')
-        .fill();
-
-      // Add elegant border with rounded corners and shadow effect
-      doc.roundedRect(25, 25, doc.page.width - 50, doc.page.height - 50, 10)
-        .lineWidth(1.5)
-        .strokeColor('#1a365d')
+      // Main border - double line frame
+      const outerBorder = 15;
+      const innerBorder = 20;
+      
+      // Outer border
+      doc.rect(outerBorder, outerBorder, doc.page.width - outerBorder * 2, doc.page.height - outerBorder * 2)
+        .lineWidth(2)
+        .strokeColor(accentColor)
+        .stroke();
+      
+      // Inner border
+      doc.rect(innerBorder, innerBorder, doc.page.width - innerBorder * 2, doc.page.height - innerBorder * 2)
+        .lineWidth(1)
+        .strokeColor('#d1d5db')
         .stroke();
 
-      // Add a very subtle watermark pattern for anti-counterfeiting
-      if (fs.existsSync(watermarkPath)) {
-        doc.image(watermarkPath, doc.page.width / 2 - 200, doc.page.height / 2 - 200, {
-          width: 400,
-          opacity: 0.04
-        });
-      }
+      // Decorative header bar with diagonal stripes
+      const headerHeight = 100;
+      
+      // Main header background
+      doc.rect(innerBorder, innerBorder, doc.page.width - innerBorder * 2, headerHeight)
+        .fillColor(accentColor)
+        .fill();
 
-      // ===== HEADER SECTION =====
-      // Logo placement - top left
-      const logoSize = 70;
-      const logoY = 35;
-      if (institutionLogo && fs.existsSync(institutionLogo)) {
-        doc.image(institutionLogo, 40, logoY, { width: logoSize });
+      // Diagonal decorative stripes on the right side of header
+      const stripeStartX = doc.page.width - 250;
+      const stripeWidth = 80;
+      const stripeSpacing = 20;
+      
+      for (let i = 0; i < 3; i++) {
+        const x = stripeStartX + (i * (stripeWidth + stripeSpacing));
+        doc.save();
+        doc.moveTo(x, innerBorder)
+          .lineTo(x + stripeWidth, innerBorder)
+          .lineTo(x + stripeWidth + 50, innerBorder + headerHeight)
+          .lineTo(x + 50, innerBorder + headerHeight)
+          .closePath()
+          .fillOpacity(i === 1 ? 0.3 : 0.15)
+          .fill(secondaryColor);
+        doc.restore();
+      }
+      
+      doc.fillOpacity(1);
+
+      // ===== HEADER SECTION WITH LOGO AND INSTITUTION =====
+      
+      // Download and place institution logo if it's a URL
+      let logoImagePath = null;
+      if (institutionLogo && institutionLogo.startsWith('http')) {
+        const tempLogoPath = path.join(assetsPath, `temp_logo_${Date.now()}.png`);
+        logoImagePath = await downloadImageFromURL(institutionLogo, tempLogoPath);
+      } else if (institutionLogo && fs.existsSync(institutionLogo)) {
+        logoImagePath = institutionLogo;
       } else if (logoPath && fs.existsSync(logoPath)) {
-        doc.image(logoPath, 40, logoY, { width: logoSize });
+        logoImagePath = logoPath;
       } else if (fs.existsSync(defaultLogoPath)) {
-        doc.image(defaultLogoPath, 40, logoY, { width: logoSize });
+        logoImagePath = defaultLogoPath;
       }
 
-      // Institution name - centered at top with improved styling
-      doc.fontSize(24)
-        .font('Helvetica-Bold')
-        .fillColor('#1a365d')
-        .text(institutionName, 120, logoY + 8, {
+      // Logo in header (left side)
+      const logoSize = 70;
+      const logoX = 40;
+      const logoY = innerBorder + 15;
+      
+      if (logoImagePath && fs.existsSync(logoImagePath)) {
+        // White circle background for logo
+        doc.circle(logoX + logoSize / 2, logoY + logoSize / 2, logoSize / 2 + 5)
+          .fillColor('#ffffff')
+          .fill();
+        
+        doc.image(logoImagePath, logoX, logoY, { 
+          width: logoSize, 
+          height: logoSize, 
+          fit: [logoSize, logoSize],
           align: 'center',
-          width: doc.page.width - 240
+          valign: 'center'
+        });
+      }
+
+      // Institution name and tagline in header
+      const institutionTextX = logoX + logoSize + 20;
+      const institutionTextY = logoY + 10;
+      
+      doc.fontSize(22)
+        .font('Helvetica-Bold')
+        .fillColor('#ffffff')
+        .text(institutionName.toUpperCase(), institutionTextX, institutionTextY, {
+          width: 400
         });
 
-      // Add digital seal on right side if available
-      if (fs.existsSync(sealPath)) {
-        doc.image(sealPath, doc.page.width - 110, logoY, { width: logoSize });
-      }
-
-      // ===== TITLE SECTION =====
-      const titleY = 120;
-      // Add decorative line above the title
-      const upperLineY = titleY - 10;
-      doc.moveTo(doc.page.width / 2 - 170, upperLineY)
-        .lineTo(doc.page.width / 2 + 170, upperLineY)
-        .lineWidth(1)
-        .stroke('#2b6cb0');
-
-      doc.fontSize(38)
-        .font('Helvetica-Bold')
-        .fillColor('#2b6cb0')
-        .text('CERTIFICATE', 0, titleY, { align: 'center' })
-        .fontSize(18)
-        .fillColor('#4a5568')
-        .text(`OF ${certificateType}`, 0, titleY + 42, { align: 'center' });
-
-      // Add decorative line below the "OF ACHIEVEMENT" text
-      const lineY = titleY + 75;
-      doc.moveTo(doc.page.width / 2 - 170, lineY)
-        .lineTo(doc.page.width / 2 + 170, lineY)
-        .lineWidth(1)
-        .stroke('#2b6cb0');
-
-      // ===== RECIPIENT & COURSE SECTION =====
-      const contentY = lineY + 25;
-
-      // "This is to certify that"
-      doc.fontSize(14)
+      doc.fontSize(10)
         .font('Helvetica')
-        .fillColor('#4a5568')
-        .text('This is to certify that', 0, contentY, { align: 'center' });
+        .fillColor('#ffffff')
+        .fillOpacity(0.9)
+        .text('Blockchain-Verified Certificates', institutionTextX, institutionTextY + 30)
+        .fillOpacity(1);
 
-      // Recipient name - make font size responsive to name length with improved styling
-      const fontSize = candidateName.length > 25 ? 30 : 36;
-      doc.fontSize(fontSize)
-        .font('Helvetica-Bold')
-        .fillColor('#1a365d')
-        .text(candidateName.toUpperCase(), 0, contentY + 25, {
-          align: 'center',
-          characterSpacing: 0.5 // Add slight character spacing for better readability
+      // Date and certificate number in top right corner of header
+      const headerRightX = doc.page.width - 200;
+      const dateText = issuedDate ? new Date(issuedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase() : new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase();
+      
+      doc.fontSize(9)
+        .font('Helvetica')
+        .fillColor('#ffffff')
+        .fillOpacity(0.8)
+        .text(dateText, headerRightX, logoY + 15, {
+          width: 150,
+          align: 'right'
         });
 
-      // Text based on certificate type
-      let completionText;
+      if (referenceId) {
+        doc.fontSize(9)
+          .fillColor('#ffffff')
+          .fillOpacity(0.8)
+          .text(`CERTIFICATE NO: ${referenceId}`, headerRightX, logoY + 30, {
+            width: 150,
+            align: 'right'
+          });
+      }
+      
+      doc.fillOpacity(1);
+
+      // ===== MAIN CONTENT AREA =====
+      const contentStartY = innerBorder + headerHeight + 40;
+      const contentWidth = doc.page.width - innerBorder * 2 - 80;
+      const contentCenterX = doc.page.width / 2;
+
+      // "CERTIFICATE" title
+      doc.fontSize(48)
+        .font('Helvetica-Bold')
+        .fillColor(accentColor)
+        .text('CERTIFICATE', 0, contentStartY, {
+          width: doc.page.width,
+          align: 'center',
+          characterSpacing: 2
+        });
+
+      // Certificate type subtitle
+      doc.fontSize(20)
+        .font('Helvetica')
+        .fillColor('#6b7280')
+        .text(`OF ${certificateType}`, 0, contentStartY + 55, {
+          width: doc.page.width,
+          align: 'center',
+          characterSpacing: 1
+        });
+
+      // Decorative line
+      const decorLineWidth = 120;
+      doc.moveTo(contentCenterX - decorLineWidth / 2, contentStartY + 85)
+        .lineTo(contentCenterX + decorLineWidth / 2, contentStartY + 85)
+        .lineWidth(2)
+        .strokeColor(accentColor)
+        .stroke();
+
+      // "presented to" text
+      doc.fontSize(14)
+        .font('Helvetica-Oblique')
+        .fillColor('#9ca3af')
+        .text('presented to', 0, contentStartY + 105, {
+          width: doc.page.width,
+          align: 'center'
+        });
+
+      // Recipient name - large and elegant
+      const nameFontSize = candidateName.length > 25 ? 34 : 42;
+      doc.fontSize(nameFontSize)
+        .font('Times-Italic')
+        .fillColor('#1f2937')
+        .text(candidateName, 40, contentStartY + 135, {
+          width: doc.page.width - 80,
+          align: 'center',
+          characterSpacing: 0.5
+        });
+
+      // Decorative underline for name
+      const nameUnderlineWidth = Math.min(candidateName.length * (nameFontSize * 0.6), doc.page.width - 200);
+      doc.moveTo(contentCenterX - nameUnderlineWidth / 2, contentStartY + 185)
+        .lineTo(contentCenterX + nameUnderlineWidth / 2, contentStartY + 185)
+        .lineWidth(1.5)
+        .strokeColor('#d1d5db')
+        .stroke();
+
+      // Achievement description
+      let achievementText;
       switch (certificateType) {
         case 'COMPLETION':
-          completionText = 'has successfully completed the course';
+          achievementText = 'for successfully completing the course';
           break;
         case 'PARTICIPATION':
-          completionText = 'has participated in the course';
+          achievementText = 'for active participation in';
           break;
         case 'ACHIEVEMENT':
         default:
-          completionText = 'has successfully achieved excellence in';
+          achievementText = 'for outstanding achievement in';
           break;
       }
 
-      doc.fontSize(14)
+      doc.fontSize(13)
         .font('Helvetica')
-        .fillColor('#4a5568')
-        .text(completionText, 0, contentY + 70, { align: 'center' });
+        .fillColor('#6b7280')
+        .text(achievementText, 40, contentStartY + 205, {
+          width: doc.page.width - 80,
+          align: 'center',
+          lineGap: 3
+        });
 
-      // Course name - make font size responsive to course name length with improved styling
-      const courseNameFontSize = courseName.length > 40 ? 22 : 26;
+      // Course name - prominent
+      const courseNameFontSize = courseName.length > 40 ? 18 : 22;
       doc.fontSize(courseNameFontSize)
         .font('Helvetica-Bold')
-        .fillColor('#2b6cb0')
-        .text(courseName, 0, contentY + 95, {
-          align: 'center',
+        .fillColor(accentColor)
+        .text(courseName, 40, contentStartY + 235, {
           width: doc.page.width - 80,
+          align: 'center',
           characterSpacing: 0.3
         });
 
-      // ===== UNIFIED DETAILS SECTION - USING TWO COLUMNS AT BOTTOM =====
-      // This creates a more organized bottom section with better space utilization
+      // ===== BOTTOM SECTION - SIGNATURE AND VERIFICATION =====
+      const bottomY = doc.page.height - 145;
+      
+      // Signature section - centered
+      const signatureY = bottomY - 30;
+      const signatureWidth = 180;
+      const leftSignatureX = contentCenterX - signatureWidth - 100;
+      const rightSignatureX = contentCenterX + 100;
 
-      // Create a subtle container for both columns with improved styling
-      const detailsContainerX = 35;
-      const detailsContainerWidth = doc.page.width - 70 - 130; // Leave space for QR code
-
-      // Calculate dimensions
-      const leftX = detailsContainerX + 5; // Reduced margin to move content more to the left
-      const detailsY = doc.page.height - 140; // Move up slightly
-      const columnWidth = detailsContainerWidth / 2 - 10; // Split width between columns with spacing
-
-      // Create a unified background for both detail sections
-      doc.roundedRect(detailsContainerX, detailsY - 5, detailsContainerWidth, 110, 5)
-        .fillOpacity(0.04)
-        .fillColor('#1a365d')
-        .fill()
-        .fillOpacity(1);
-
-      // Left column - Certificate details
-      // Title for the details section with improved styling
-      doc.fontSize(13)
-        .font('Helvetica-Bold')
-        .fillColor('#1a365d')
-        .text('CERTIFICATE DETAILS', leftX, detailsY);
-
-      // Add a small decorative line below the section title
-      doc.moveTo(leftX, detailsY + 17)
-        .lineTo(leftX + 60, detailsY + 17)
+      // Line above date
+      doc.moveTo(leftSignatureX + 20, signatureY - 5)
+        .lineTo(leftSignatureX + signatureWidth - 20, signatureY - 5)
         .lineWidth(1)
-        .stroke('#2b6cb0');
+        .strokeColor(accentColor)
+        .stroke();
 
-      // Technical details with improved styling
-      doc.fontSize(10)
+      // Date on the left
+      doc.fontSize(11)
         .font('Helvetica')
-        .fillColor('#4a5568');
-
-      let currentY = detailsY + 22;
-      const lineSpacing = 15;
-
-      // Date information
-      const issuedText = issuedDate ? new Date(issuedDate).toLocaleDateString() : new Date().toLocaleDateString();
-      doc.text(`Date Issued: `, leftX, currentY)
-        .font('Helvetica-Bold')
-        .text(issuedText, leftX + 70, currentY);
-      currentY += lineSpacing;
-
-      if (validUntil) {
-        doc.font('Helvetica')
-          .text(`Valid Until: `, leftX, currentY)
-          .font('Helvetica-Bold')
-          .text(new Date(validUntil).toLocaleDateString(), leftX + 70, currentY);
-        currentY += lineSpacing;
-      }
-
-      doc.font('Helvetica')
-        .text(`Reference ID: `, leftX, currentY)
-        .font('Helvetica-Bold')
-        .text(referenceId, leftX + 70, currentY);
-      currentY += lineSpacing;
-
-      doc.font('Helvetica')
-        .text(`Verification Code: `, leftX, currentY)
-        .font('Helvetica-Bold')
-        .text(verificationCode, leftX + 70, currentY);
-      currentY += lineSpacing;
-
-      // Right column - Blockchain verification  
-      const rightX = leftX + columnWidth + 20; // Increased spacing between columns
-
-      // Title for the blockchain section with improved styling
-      currentY = detailsY; // Reset Y position for right column
-      doc.fontSize(13)
-        .font('Helvetica-Bold')
-        .fillColor('#1a365d')
-        .text('BLOCKCHAIN VERIFIED', rightX, currentY);
-
-      // Add a small decorative line below the section title
-      doc.moveTo(rightX, detailsY + 17)
-        .lineTo(rightX + 60, detailsY + 17)
-        .lineWidth(1)
-        .stroke('#2b6cb0');
-
-      currentY += 22;
-      doc.fontSize(10)
-        .font('Helvetica')
-        .fillColor('#4a5568')
-        .text('This certificate is secured using blockchain technology for tamper-proof verification.',
-          rightX, currentY, { width: columnWidth });
-
-      currentY += 28;
-
-      // Add certificate ID in a truncated format with improved styling
-      if (certificateId) {
-        const shortCertId = `${certificateId.substring(0, 8)}...${certificateId.substring(certificateId.length - 8)}`;
-        doc.font('Helvetica')
-          .text(`Certificate ID: `, rightX, currentY)
-          .font('Helvetica-Bold')
-          .text(shortCertId, rightX + 80, currentY);
-        currentY += lineSpacing;
-      }
-
-      // Add signature if available (shortened)
-      if (cryptographicSignature) {
-        const shortSig = `${cryptographicSignature.substring(0, 8)}...${cryptographicSignature.substring(cryptographicSignature.length - 8)}`;
-        doc.font('Helvetica')
-          .text(`Digital Signature: `, rightX, currentY)
-          .font('Helvetica-Bold')
-          .text(shortSig, rightX + 80, currentY);
-        currentY += lineSpacing;
-      }
-
-      // Make verification URL clickable
-      // Create auto-verification URL with code parameter
-      const completeVerificationUrl = `${frontendUrl.split('?')[0]}?code=${verificationCode}&auto=true`;
-
-      // Add clickable "Verify at:" text with link
-      const verifyText = `Verify at: `;
-      const urlText = frontendUrl.split('?')[0];
-      doc.fontSize(10)
-        .font('Helvetica')
-        .fillColor('#4a5568')
-        .text(verifyText, rightX, currentY, { continued: true })
-        .fillColor('#0066cc')
-        .font('Helvetica-Bold')
-        .text(urlText, {
-          underline: true,
-          link: completeVerificationUrl
+        .fillColor('#4b5563')
+        .text(issuedDate ? new Date(issuedDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }), leftSignatureX, signatureY + 3, {
+          width: signatureWidth,
+          align: 'center'
         });
 
-      // ===== QR CODE PLACEMENT =====
-      // Bottom right - adjust position for better spacing
-      let qrX = doc.page.width - 155;
-      let qrY = doc.page.height - 145;
-      let qrSize = 115;
+      doc.fontSize(8)
+        .font('Helvetica-Bold')
+        .fillColor(accentColor)
+        .text('DATE', leftSignatureX, signatureY + 20, {
+          width: signatureWidth,
+          align: 'center'
+        });
 
-      // Check for valid numbers to prevent NaN errors
-      if (isNaN(qrX) || isNaN(qrY) || isNaN(qrSize)) {
-        console.warn('QR code positioning values contain NaN:', { qrX, qrY, qrSize, pageWidth: doc.page.width, pageHeight: doc.page.height });
-        // Use fallback values
-        qrX = 600;
-        qrY = 500;
-        qrSize = 115;
-      }
+      // Award badge in center
+      const badgeSize = 45;
+      const badgeX = contentCenterX - badgeSize / 2;
+      const badgeY = signatureY - 10;
+      
+      // Outer circle
+      doc.circle(badgeX + badgeSize / 2, badgeY + badgeSize / 2, badgeSize / 2)
+        .fillColor(accentColor)
+        .fill();
+      
+      // Inner circle
+      doc.circle(badgeX + badgeSize / 2, badgeY + badgeSize / 2, badgeSize / 2 - 4)
+        .fillColor(secondaryColor)
+        .fill();
 
-      // Additional safety check for derived values
-      const safeRect = (x, y, width, height, radius) => {
-        if (isNaN(x) || isNaN(y) || isNaN(width) || isNaN(height) || isNaN(radius)) {
-          console.warn('Invalid parameters for roundedRect:', { x, y, width, height, radius });
-          return false;
-        }
-        return true;
-      };
+      // Star symbol in badge - using proper Unicode star
+      doc.fontSize(22)
+        .font('Helvetica-Bold')
+        .fillColor('#ffffff')
+        .text('★', badgeX + badgeSize / 2 - 6, badgeY + badgeSize / 2 - 10);
 
-      // Add a subtle background for QR code with rounded corners
-      if (safeRect(qrX - 5, qrY - 5, qrSize + 10, qrSize + 10, 5)) {
-        doc.roundedRect(qrX - 5, qrY - 5, qrSize + 10, qrSize + 10, 5)
-          .fillOpacity(0.04)
-          .fillColor('#1a365d')
-          .fill()
-          .fillOpacity(1);
-      }
+      // Line above signature
+      doc.moveTo(rightSignatureX + 20, signatureY - 5)
+        .lineTo(rightSignatureX + signatureWidth - 20, signatureY - 5)
+        .lineWidth(1)
+        .strokeColor(accentColor)
+        .stroke();
+
+      // Authorized signature on the right
+      doc.fontSize(14)
+        .font('Times-Italic')
+        .fillColor('#4b5563')
+        .text('Authorized Signature', rightSignatureX, signatureY + 3, {
+          width: signatureWidth,
+          align: 'center'
+        });
+
+      doc.fontSize(8)
+        .font('Helvetica-Bold')
+        .fillColor(accentColor)
+        .text('AUTHORIZED SIGNATORY', rightSignatureX, signatureY + 20, {
+          width: signatureWidth,
+          align: 'center'
+        });
+
+      // QR Code and verification info at bottom
+      const qrSize = 75;
+      const qrX = 45;
+      const qrY = doc.page.height - 105;
 
       if (qrCodeDataURL) {
-        // Add a white background for QR code with slight rounding
-        if (safeRect(qrX, qrY, qrSize, qrSize, 2)) {
-          doc.roundedRect(qrX, qrY, qrSize, qrSize, 2)
-            .fill('#ffffff');
-
-          // Add the QR code
-          doc.image(qrCodeDataURL, qrX, qrY, { width: qrSize });
-
-          // Improved "Scan to verify" text
-          // First create a semi-transparent blue background
-          if (safeRect(qrX, qrY + qrSize - 22, qrSize, 22, [0, 0, 2, 2])) {
-            doc.roundedRect(qrX, qrY + qrSize - 22, qrSize, 22, [0, 0, 2, 2])
-              .fillOpacity(0.1)
-              .fillColor('#1a365d')
-              .fill()
-              .fillOpacity(1);
-          }
-
-          // Draw text with better positioning and style
-          doc.fontSize(10)
-            .fillColor('#1a365d')
-            .font('Helvetica-Bold')
-            .text('Scan to verify', qrX + 5, qrY + qrSize - 17, {
-              width: qrSize - 10,
-              align: 'center'
-            });
-        }
-      }
-      // Fallback method: Use file if data URL failed
-      else if (fs.existsSync(qrCodePath)) {
-        // Add a white background for QR code with slight rounding
-        if (safeRect(qrX, qrY, qrSize, qrSize, 2)) {
-          doc.roundedRect(qrX, qrY, qrSize, qrSize, 2)
-            .fill('#ffffff');
-
-          // Add the QR code
-          doc.image(qrCodePath, qrX, qrY, { width: qrSize });
-
-          // Improved "Scan to verify" text
-          // First create a semi-transparent blue background
-          if (safeRect(qrX, qrY + qrSize - 22, qrSize, 22, [0, 0, 2, 2])) {
-            doc.roundedRect(qrX, qrY + qrSize - 22, qrSize, 22, [0, 0, 2, 2])
-              .fillOpacity(0.1)
-              .fillColor('#1a365d')
-              .fill()
-              .fillOpacity(1);
-          }
-
-          // Draw text with better positioning and style
-          doc.fontSize(10)
-            .fillColor('#1a365d')
-            .font('Helvetica-Bold')
-            .text('Scan to verify', qrX + 5, qrY + qrSize - 17, {
-              width: qrSize - 10,
-              align: 'center'
-            });
-        }
+        doc.image(qrCodeDataURL, qrX, qrY, { width: qrSize });
+      } else if (fs.existsSync(qrCodePath)) {
+        doc.image(qrCodePath, qrX, qrY, { width: qrSize });
       }
 
-      // Add a note about the verification options with improved styling
-      doc.fontSize(9)
-        .font('Helvetica-Oblique')
-        .fillColor('#4a5568')
-        .text("Note: Either scan the QR code or click the blue link above to verify this certificate online.",
-          leftX, doc.page.height - 30, { width: columnWidth * 2 });
+      // Verification text next to QR
+      const verifyTextX = qrX + qrSize + 12;
+      doc.fontSize(7)
+        .font('Helvetica-Bold')
+        .fillColor('#1f2937')
+        .text('VERIFY THIS CERTIFICATE', verifyTextX, qrY + 2);
+
+      doc.fontSize(6.5)
+        .font('Helvetica')
+        .fillColor('#6b7280')
+        .text(`Code: ${verificationCode}`, verifyTextX, qrY + 15);
+
+      if (validUntil) {
+        doc.fontSize(6.5)
+          .fillColor('#6b7280')
+          .text(`Valid Until: ${new Date(validUntil).toLocaleDateString()}`, verifyTextX, qrY + 26);
+      }
+
+      doc.fontSize(6.5)
+        .fillColor(accentColor)
+        .font('Helvetica-Bold')
+        .text('🔒 Blockchain Secured', verifyTextX, qrY + (validUntil ? 37 : 26));
 
       // Finalize PDF
       doc.end();
 
       stream.on('finish', () => {
-        // Clean up temporary QR code file
+        // Clean up temporary files
         if (fs.existsSync(qrCodePath)) {
           fs.unlinkSync(qrCodePath);
         }
+        // Clean up temporary logo file if it was downloaded
+        if (logoImagePath && logoImagePath.includes('temp_logo_')) {
+          try {
+            if (fs.existsSync(logoImagePath)) {
+              fs.unlinkSync(logoImagePath);
+            }
+          } catch (err) {
+            console.warn('Could not delete temporary logo file:', err.message);
+          }
+        }
         resolve(outputPath);
       });
-      stream.on('error', reject);
+      stream.on('error', (err) => {
+        // Clean up temporary files in case of error
+        if (fs.existsSync(qrCodePath)) {
+          fs.unlinkSync(qrCodePath);
+        }
+        if (logoImagePath && logoImagePath.includes('temp_logo_')) {
+          try {
+            if (fs.existsSync(logoImagePath)) {
+              fs.unlinkSync(logoImagePath);
+            }
+          } catch (cleanupErr) {
+            console.warn('Could not delete temporary logo file:', cleanupErr.message);
+          }
+        }
+        reject(err);
+      });
     } catch (error) {
       // Clean up temporary files in case of error
       if (fs.existsSync(qrCodePath)) {

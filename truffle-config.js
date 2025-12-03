@@ -1,2 +1,3 @@
 // truffle-config.js
-module.exports = require('./truffle-config.cjs');
+// This file is not used - Truffle will automatically use truffle-config.cjs
+// Keeping for compatibility

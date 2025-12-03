@@ -1,13 +1,15 @@
 // src/middlewares/authMiddleware.js
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
+import User from '../models/user.model.js';
 
 dotenv.config();
 
 /**
  * JWT authentication middleware.
+ * Verifies the JWT token and fetches the full user from database.
  */
-const authMiddleware = (req, res, next) => {
+const authMiddleware = async (req, res, next) => {
   console.log('[Auth] Checking authentication...');
   const authHeader = req.headers.authorization;
 
@@ -29,7 +31,34 @@ const authMiddleware = (req, res, next) => {
     console.log('[Auth] Verifying token...');
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     console.log(`[Auth] Token valid for user: ${decoded.id}, role: ${decoded.role}`);
-    req.user = decoded;
+    
+    // Fetch full user from database to get latest data including institutionName
+    const user = await User.findById(decoded.id).select('-password -refreshToken -privateKey');
+    
+    if (!user) {
+      console.log('[Auth] User not found in database:', decoded.id);
+      return res.status(401).json({
+        success: false,
+        status: 'ERROR',
+        message: 'User not found',
+        code: 'USER_NOT_FOUND',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Set req.user with full user data
+    req.user = {
+      id: user._id.toString(),
+      role: user.role,
+      name: user.name,
+      email: user.email,
+      institutionName: user.institutionName,
+      institutionLogo: user.institutionLogo,
+      walletAddress: user.walletAddress,
+      publicKey: user.publicKey
+    };
+    
+    console.log(`[Auth] User loaded: ${user.name}, institutionName: ${user.institutionName || 'N/A'}`);
     next();
   } catch (error) {
     console.error('[Auth] Token verification failed:', error.message);

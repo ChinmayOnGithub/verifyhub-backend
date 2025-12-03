@@ -28,6 +28,8 @@ export const getUserProfile = async (req, res) => {
 
     // For institute users, check if they need cryptographic keys generated
     if (isInstitute) {
+      let needsSave = false;
+      
       // Only generate keys if they don't already exist
       if (!user.publicKey || !user.privateKey || !user.walletAddress) {
         console.log('[getUserProfile] Keys missing, generating cryptographic keys for institute user');
@@ -46,15 +48,25 @@ export const getUserProfile = async (req, res) => {
           user.publicKey = publicKey;
           user.privateKey = privateKey;
           user.walletAddress = walletAddress;
-
-          // Save the updated user
-          await user.save();
-          console.log('[getUserProfile] Cryptographic keys generated and saved to database');
+          needsSave = true;
         } catch (error) {
           console.error('[getUserProfile] Error generating keys:', error.message);
         }
       } else {
         console.log('[getUserProfile] User already has cryptographic keys');
+      }
+      
+      // Auto-populate institutionName if missing (for existing users)
+      if (!user.institutionName && user.name) {
+        console.log('[getUserProfile] Setting institutionName from name field');
+        user.institutionName = user.name;
+        needsSave = true;
+      }
+      
+      // Save if any updates were made
+      if (needsSave) {
+        await user.save();
+        console.log('[getUserProfile] User profile updated and saved to database');
       }
     }
 
@@ -126,9 +138,23 @@ export const updateUserProfile = async (req, res) => {
       return res.status(statusCode).json(response);
     }
 
+    // Get user to check role
+    const user = await User.findById(userId);
+    if (!user) {
+      const { response, statusCode } = errorResponse('USER_NOT_FOUND', 'User not found');
+      return res.status(statusCode).json(response);
+    }
+
     // Create update object with only provided fields
     const updateData = {};
-    if (name) updateData.name = name;
+    if (name) {
+      updateData.name = name;
+      // For INSTITUTE users, also update institutionName when name changes
+      if (user.role.toUpperCase() === 'INSTITUTE') {
+        updateData.institutionName = name;
+        console.log(`[updateUserProfile] Updating institutionName to: ${name}`);
+      }
+    }
     if (email) updateData.email = email;
 
     // Update user and return updated document
@@ -308,3 +334,54 @@ export const getUserCertificates = async (req, res) => {
     return res.status(statusCode).json(response);
   }
 }; 
+
+/**
+ * Update user's institution logo
+ */
+export const updateUserLogo = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No logo file provided'
+      });
+    }
+
+    // Upload logo to IPFS
+    const { uploadBufferToPinata } = await import('../utils/pinata.js');
+    const ipfsHash = await uploadBufferToPinata(req.file.buffer, `logo_${userId}_${Date.now()}.${req.file.mimetype.split('/')[1]}`);
+    
+    const logoUrl = `https://gateway.pinata.cloud/ipfs/${ipfsHash}`;
+
+    // Update user's logo
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { institutionLogo: logoUrl },
+      { new: true, select: '-password -refreshToken -privateKey' }
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Logo updated successfully',
+      data: {
+        institutionLogo: user.institutionLogo
+      }
+    });
+  } catch (error) {
+    console.error('Error updating logo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update logo',
+      error: error.message
+    });
+  }
+};

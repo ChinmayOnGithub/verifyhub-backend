@@ -1,7 +1,7 @@
 // 2_deploy_certification.js
 const Certification = artifacts.require("Certification");
 const fs = require('fs');
-const path = require('path');
+const path = require('node:path');
 
 module.exports = async function (deployer) {
   try {

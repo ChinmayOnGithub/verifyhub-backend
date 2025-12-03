@@ -1,6 +1,6 @@
-# CertChain: Comprehensive Technical Documentation
+# VerifyHub: Comprehensive Technical Documentation
 
-**Version:** 2.0.0 | **Last Updated:** [Date]
+**Version:** 1.0.0 | **Last Updated:** December 2025
 
 ## Table of Contents
 

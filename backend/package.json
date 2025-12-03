@@ -1,7 +1,7 @@
 {
   "name": "verifyhub-backend",
   "version": "1.0.0",
-  "description": "certificate validation platform",
+  "description": "VerifyHub - Blockchain Certificate Verification Platform",
   "main": "index.js",
   "type": "module",
   "scripts": {
